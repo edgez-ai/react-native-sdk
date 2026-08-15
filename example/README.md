@@ -14,6 +14,9 @@ npm run android
 npm run start
 ```
 
+The local `file:..` SDK link is configured through `metro.config.js`; run
+`npm install` in this directory whenever the SDK's runtime dependencies change.
+
 Open the generated `example/android` directory in Android Studio. The example's
 postinstall and Expo config plugins resolve Node from `NODE_BINARY`, standard
 Homebrew locations, or the current user's NVM installation so Gradle sync does

@@ -95,7 +95,7 @@ const directPatches = [
     replacements: [
       {
         pattern:
-          /(arrayOf\()"[^"]+", "--print", "require\.resolve\('react-native\/cli'\);"\)/g,
+          /((?:exec\.commandLine|arrayOf)\()"[^"]+", "--print", "require\.resolve\('react-native\/cli'\);"\)/g,
         replacement: `$1${nodeLiteral}, "--print", "require.resolve('react-native/cli');")`,
       },
     ],
