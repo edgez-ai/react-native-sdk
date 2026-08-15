@@ -1,0 +1,11 @@
+node_modules/
+lib/
+*.log
+.DS_Store
+.expo/
+example/.expo/
+example/android/
+example/node_modules/
+android/.gradle/
+android/build/
+android/local.properties

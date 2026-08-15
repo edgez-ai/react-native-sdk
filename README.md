@@ -1,2 +1,115 @@
-# react-native-sdk
-react native sdk for halow mesh
+# EdgeZ React Native SDK
+
+React Native/Expo SDK for EdgeZ HaLow mesh devices, ported from the EdgeZ
+Flutter SDK. The current native transport supports Android; iOS is not yet
+implemented.
+
+## Included
+
+- BLE scan, connect, disconnect, EdgeZ framing, and event delivery
+- HaLow mesh initialization and license credentials
+- protobuf-compatible status, settings, beacon, topology, and message packets
+- X25519 + AES-256-GCM encrypted conversations
+- chunked encrypted voice-message protocol
+- native Opus/AMR voice-message recording and playback
+- device provisioning settings and Lua driver transfer
+- BLE firmware OTA with acknowledged writes, progress, and cancellation
+- Android BLE foreground service and message/call notification channels
+- best-known Android location lookup for shared beacons
+- identity, BLE preference, and installed-driver persistence
+- stateful `EdgezMeshSession` and React `useEdgezMesh` hooks
+- an Expo SDK 57 development-client example
+
+Live voice-call audio still needs to be ported from the Flutter native plugin.
+Its public methods report `not_available` rather than silently behaving
+incorrectly. Text and recorded voice messages are supported.
+
+## Install
+
+```sh
+npm install @edgez/react-native-sdk \
+  @react-native-async-storage/async-storage
+```
+
+The SDK contains an Android native module. Rebuild the native application after
+installing it; Expo Go cannot load it.
+
+## Basic use
+
+```tsx
+import React, {useEffect, useMemo} from 'react';
+import {EdgezIdentityStore, EdgezMeshSession, useEdgezMesh} from '@edgez/react-native-sdk';
+
+export function MeshScreen() {
+  const session = useMemo(() => new EdgezMeshSession(), []);
+  const state = useEdgezMesh(session);
+
+  useEffect(() => () => session.dispose(), [session]);
+
+  async function initialize() {
+    const identity = await new EdgezIdentityStore().getOrCreate();
+    await session.initializeMesh({
+      identity,
+      countryCode: 'SE',
+      meshId: 'edgez',
+      passphrase: '',
+      maxHop: 4,
+      beacon: {marker: 'blue'},
+    });
+  }
+
+  // Render state.bleDevices, state.nodes, state.conversations, etc.
+  return null;
+}
+```
+
+Typical connection sequence:
+
+```ts
+await session.startBleScan();
+await session.connectBle(device.id);
+// When state.bleReady becomes true:
+await session.initializeMesh(config);
+await session.sendTextMessage(node.nodeNum, 'Hello mesh');
+```
+
+Applications that use another state architecture can construct `EdgezMeshSdk`
+directly. Tests can inject an `EdgezPlatformTransport` without Android or BLE
+hardware.
+
+## Expo example
+
+The [`example`](example/) follows the managed Expo structure used by
+`template-iot-prov`: Expo SDK 57, `expo/AppEntry.js`, `app.config.js`, and a
+development-client/EAS profile.
+
+```sh
+cd example
+npm install
+npm run android   # creates and installs the native Expo development build
+npm run start     # later JavaScript-only iterations
+```
+
+The example includes BLE connection, mesh status, discovered nodes, encrypted
+text and recorded voice messages, notification permission, mesh configuration,
+device-settings requests, and OTA readiness.
+
+## Development
+
+```sh
+npm install
+npm run typecheck
+npm test -- --runInBand
+npm run build
+```
+
+The wire schema is committed at [`protos/edgez_mesh.proto`](protos/edgez_mesh.proto).
+Protocol tests cover initialization fields, 64-bit IDs, topology reports, and
+the Flutter-compatible 220-byte driver upload chunks.
+
+## SDK release credential
+
+The source currently carries the signed compatibility credential from the
+Flutter `0.1.0` reference so it can target the same firmware compatibility
+range. Before publishing an official React Native release, replace it with a
+React-Native-specific credential signed by the EdgeZ SDK release process.
