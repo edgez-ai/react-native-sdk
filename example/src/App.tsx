@@ -1,5 +1,6 @@
 import React, {useEffect, useMemo, useState} from 'react';
-import {SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 import {
   EdgezIdentityStore, EdgezMeshSdk, EdgezMeshSession, edgezBleDeviceLabel, edgezNodeDisplayName,
   type EdgezMeshConfig, type EdgezMeshNode, useEdgezMesh,
@@ -31,7 +32,7 @@ export default function App() {
   const nodes = [...state.nodes.values()];
   const selectedNode = selected === undefined ? undefined : state.nodes.get(selected);
 
-  return <SafeAreaView style={styles.safe}>
+  return <SafeAreaProvider><SafeAreaView style={styles.safe}>
     <StatusBar barStyle="light-content" />
     <View style={styles.header}><Text style={styles.title}>EdgeZ Mesh</Text><Text style={styles.status}>{state.statusLine}</Text></View>
     <View style={styles.tabs}>{(['Connect','Nodes','Messages','Settings'] as Tab[]).map(item =>
@@ -73,7 +74,7 @@ export default function App() {
         <Card title="Device & firmware"><Button label="Request device settings" secondary onPress={() => session.requestDeviceSettings()} /><View style={styles.spacer}/><Button label="Enable notifications" secondary onPress={() => session.sdk.requestNotificationPermission().then(allowed => console.log('Notifications allowed', allowed))} /><View style={styles.spacer}/><Button label="Check OTA availability" secondary onPress={async () => console.log('OTA ready', await session.sdk.isOtaReady())} /></Card>
       </>}
     </ScrollView>
-  </SafeAreaView>;
+  </SafeAreaView></SafeAreaProvider>;
 }
 
 function Card({title, children}: React.PropsWithChildren<{title: string}>) { return <View style={styles.card}><Text style={styles.sectionTitle}>{title}</Text>{children}</View>; }
