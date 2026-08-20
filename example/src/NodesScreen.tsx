@@ -37,6 +37,10 @@ export function NodesScreen(props: Props) {
     for (const values of result.values()) values.sort((a, b) => edgezNodeDisplayName(a).localeCompare(edgezNodeDisplayName(b)));
     return [...result.entries()].sort(([a], [b]) => a === 0 ? 1 : b === 0 ? -1 : a - b);
   }, [discovered]);
+  const run = (action: () => void | Promise<void>) => {
+    try { void Promise.resolve(action()).catch(error => console.warn('Node action failed', error)); }
+    catch (error) { console.warn('Node action failed', error); }
+  };
 
   if (selected) return <NodeDetail node={selected} state={props.state} onBack={() => setSelectedNode(undefined)} />;
   if (showRoutes) return <RoutesScreen state={props.state} onBack={() => setShowRoutes(false)} />;
@@ -46,7 +50,7 @@ export function NodesScreen(props: Props) {
     <View style={styles.titleRow}><Text style={ui.heading}>Nodes</Text><Button label="Routes" secondary onPress={() => setShowRoutes(true)} /></View>
     <Text style={ui.muted}>Interface: {props.state.connection.toUpperCase()} · {discovered.length} discovered</Text>
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.frequencyRow}>
-      {frequencies.map(value => <TouchableOpacity key={value} disabled={!props.state.bleReady} style={[styles.frequency, value === props.meshFrequencyKhz && styles.frequencyActive, !props.state.bleReady && styles.disabled]} onPress={() => void props.onMeshFrequencyChanged(value)}>
+      {frequencies.map(value => <TouchableOpacity key={value} disabled={!props.state.bleReady} style={[styles.frequency, value === props.meshFrequencyKhz && styles.frequencyActive, !props.state.bleReady && styles.disabled]} onPress={() => run(() => props.onMeshFrequencyChanged(value))}>
         <Text style={styles.frequencyText}>{halowFrequencyLabel(props.meshCountry, value)}</Text>
       </TouchableOpacity>)}
     </ScrollView>
@@ -54,7 +58,7 @@ export function NodesScreen(props: Props) {
     <Card title="Public channels" action={<Text style={ui.muted}>{publicChannels.length} channels</Text>}>
       {publicChannels.map(node => <TouchableOpacity key={node.nodeNum.toString()} style={styles.publicRow} onPress={() => setSelectedNode(node.nodeNum)}>
         <View style={styles.nodeMain}><View style={[styles.marker, {backgroundColor: nodeMarkerColor(node)}]} /><View><Text style={styles.nodeName}>{edgezNodeDisplayName(node)}</Text><Text style={ui.muted}>Talkgroup port {node.nodeNum.toString()}</Text></View></View>
-        <Switch value={node.enabled !== false} onValueChange={enabled => void props.onTogglePublicChannel(node.nodeNum, enabled)} trackColor={{true: '#0F9F91'}} />
+        <Switch value={node.enabled !== false} onValueChange={enabled => run(() => props.onTogglePublicChannel(node.nodeNum, enabled))} trackColor={{true: '#0F9F91'}} />
       </TouchableOpacity>)}
     </Card>
 

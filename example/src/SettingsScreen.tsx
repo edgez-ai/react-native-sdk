@@ -2,7 +2,7 @@ import React, {useEffect, useState} from 'react';
 import {ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {
   edgezBleDeviceLabel, isMeshUsable, type EdgezDeviceSettings,
-  type EdgezMeshConfig, type EdgezMeshSession, type EdgezMeshState,
+  type EdgezBleDevice, type EdgezMeshConfig, type EdgezMeshSession, type EdgezMeshState,
 } from '@edgez/react-native-sdk';
 import {halowBandwidthOptions, halowFrequenciesKhz, halowFrequencyLabel, markerOptions} from './presentation';
 import {Button, Card, Choices, Field, Row, ToggleRow, ui} from './ui';
@@ -35,6 +35,11 @@ interface Props {
   state: EdgezMeshState;
   session: EdgezMeshSession;
   config?: EdgezMeshConfig;
+  selectedBleDevice?: EdgezBleDevice;
+  bleAutoConnect: boolean;
+  onSelectBleDevice: (device: EdgezBleDevice) => void | Promise<void>;
+  onConnectBleDevice: (deviceId: string) => Promise<void>;
+  onBleAutoConnectChanged: (enabled: boolean) => void | Promise<void>;
   onConfigChanged: (config: EdgezMeshConfig) => void;
   onSaveConfig: () => Promise<void>;
   onRegenerateIdentity: () => Promise<void>;
@@ -57,8 +62,9 @@ const deviceDraft = (settings?: EdgezDeviceSettings): DeviceDraft => ({
   beaconMulticast: formatIpv4(settings?.beaconUnicast), sleepModeEnabled: settings?.sleepModeEnabled ?? false,
 });
 
-export function SettingsScreen({state, session, config, onConfigChanged, onSaveConfig, onRegenerateIdentity}: Props) {
+export function SettingsScreen({state, session, config, selectedBleDevice, bleAutoConnect, onSelectBleDevice, onConnectBleDevice, onBleAutoConnectChanged, onConfigChanged, onSaveConfig, onRegenerateIdentity}: Props) {
   const [tab, setTab] = useState<SettingsTab>('User');
+  const [showDeviceSelection, setShowDeviceSelection] = useState(false);
   const [draft, setDraft] = useState<DeviceDraft>(() => deviceDraft(state.deviceSettings));
   const [notice, setNotice] = useState('');
   useEffect(() => { if (state.deviceSettings) setDraft(deviceDraft(state.deviceSettings)); }, [state.deviceSettings]);
@@ -67,6 +73,27 @@ export function SettingsScreen({state, session, config, onConfigChanged, onSaveC
     try { setNotice(`${label}…`); await action(); setNotice(`${label} complete`); }
     catch (error) { setNotice(`${label} failed: ${String(error)}`); }
   };
+
+  const openDeviceSelection = () => {
+    setShowDeviceSelection(true);
+    void run('BLE scan', () => session.startBleScan());
+  };
+  const closeDeviceSelection = () => {
+    setShowDeviceSelection(false);
+    void run('Stopping BLE scan', () => session.stopBleScan());
+  };
+  const chooseBleDevice = async (device: EdgezBleDevice) => {
+    await session.stopBleScan();
+    await onSelectBleDevice(device);
+    setShowDeviceSelection(false);
+  };
+
+  if (showDeviceSelection) return <ScrollView style={ui.screen} contentContainerStyle={ui.content}>
+    <View style={styles.selectionHeader}><Button label="Back" secondary onPress={closeDeviceSelection} /><Text style={ui.heading}>Select BLE device</Text></View>
+    <Text style={ui.muted}>{notice || state.statusLine}</Text>
+    <View style={ui.actions}><Button label="Scan again" onPress={() => run('BLE scan', () => session.startBleScan())} /><Button label="Stop scan" secondary onPress={() => run('Stopping BLE scan', () => session.stopBleScan())} /></View>
+    {!state.bleDevices.size ? <Card title="Scanning for EdgeZ devices"><Text style={ui.muted}>Nearby BLE devices will appear here.</Text></Card> : [...state.bleDevices.values()].map(device => <TouchableOpacity key={device.id} style={[styles.device, selectedBleDevice?.id === device.id && styles.deviceSelected]} onPress={() => run('Selecting BLE device', () => chooseBleDevice(device))}><View style={styles.deviceText}><Text style={styles.value}>{edgezBleDeviceLabel(device)}</Text><Text style={ui.muted}>{device.id} · RSSI {device.rssi}</Text></View><Text style={styles.link}>{selectedBleDevice?.id === device.id ? 'Selected' : 'Select'}</Text></TouchableOpacity>)}
+  </ScrollView>;
 
   if (!config) return <ScrollView style={ui.screen} contentContainerStyle={ui.content}><Text style={ui.heading}>Settings</Text><Card title="Loading"><Text style={ui.muted}>Loading user identity…</Text></Card></ScrollView>;
   const beacon = config.beacon ?? {};
@@ -92,11 +119,13 @@ export function SettingsScreen({state, session, config, onConfigChanged, onSaveC
   return <ScrollView style={ui.screen} contentContainerStyle={ui.content} keyboardShouldPersistTaps="handled">
     <Text style={ui.heading}>Settings</Text>
     <Text style={ui.muted}>{notice || state.statusLine}</Text>
-    <Card title="Device connection">
-      <Row label="Interface" value={state.connection.toUpperCase()} /><Row label="Control channel" value={state.bleReady ? 'Ready' : state.bleConnecting ? 'Connecting' : 'Waiting'} />
+    <Card title="Device connection" action={<TouchableOpacity onPress={openDeviceSelection}><Text style={styles.link}>Select</Text></TouchableOpacity>}>
+      <Row label="Selected device" value={selectedBleDevice ? edgezBleDeviceLabel(selectedBleDevice) : 'No device selected'} />
+      {selectedBleDevice ? <Text style={ui.muted}>{selectedBleDevice.id}</Text> : null}
+      <Row label="Connection" value={state.connection === 'ble' ? (state.bleReady ? 'BLE connected · control channel ready' : 'BLE connected · setting up control channel') : state.bleConnecting ? 'BLE pairing or connecting' : 'Disconnected'} />
       <Row label="Firmware" value={state.status?.firmwareVersion || 'Unknown'} /><Row label="License" value={state.status?.licenseStatus || 'Waiting for status'} />
-      <View style={ui.actions}><Button label={state.connection === 'none' ? 'Scan BLE' : 'Disconnect'} onPress={() => state.connection === 'none' ? session.startBleScan() : session.disconnect()} /><Button label="Request settings" secondary disabled={!state.bleReady} onPress={() => run('Device settings request', () => session.requestDeviceSettings())} /></View>
-      {state.connection === 'none' ? [...state.bleDevices.values()].map(device => <TouchableOpacity key={device.id} style={styles.device} onPress={() => void session.connectBle(device.id)}><Text style={styles.value}>{edgezBleDeviceLabel(device)}</Text><Text style={styles.link}>Connect</Text></TouchableOpacity>) : null}
+      <View style={ui.actions}><Button label={state.connection === 'none' ? (state.bleConnecting ? 'Connecting…' : 'Connect') : 'Disconnect'} disabled={state.connection === 'none' && (!selectedBleDevice || state.bleConnecting)} onPress={() => state.connection === 'none' ? onConnectBleDevice(selectedBleDevice!.id) : session.disconnect()} /><Button label="Request settings" secondary disabled={!state.bleReady} onPress={() => run('Device settings request', () => session.requestDeviceSettings())} /></View>
+      <ToggleRow label="Auto connect" detail="Connect the selected BLE device on app start and reconnect if it drops" value={bleAutoConnect} onValueChange={enabled => { void run('Updating auto connect', () => Promise.resolve(onBleAutoConnectChanged(enabled))); }} />
     </Card>
 
     <View style={ui.sectionTabs}>{(['User', 'Mesh Network', 'Others'] as SettingsTab[]).map(value => <TouchableOpacity key={value} style={[styles.tab, tab === value && styles.tabActive]} onPress={() => setTab(value)}><Text style={styles.tabText}>{value}</Text></TouchableOpacity>)}</View>
@@ -166,5 +195,5 @@ export function SettingsScreen({state, session, config, onConfigChanged, onSaveC
 
 const styles = StyleSheet.create({
   tab: {flex: 1, borderWidth: 1, borderColor: '#354A64', paddingVertical: 10, borderRadius: 10, alignItems: 'center'}, tabActive: {backgroundColor: '#0F766E', borderColor: '#2DD4BF'}, tabText: {color: '#FFF', fontWeight: '700', fontSize: 12},
-  device: {flexDirection: 'row', justifyContent: 'space-between', gap: 8, backgroundColor: '#17263A', borderRadius: 10, padding: 12}, value: {color: '#FFF', flex: 1}, link: {color: '#2DD4BF', fontWeight: '700'}, columns: {flexDirection: 'row', gap: 8}, column: {flex: 1},
+  selectionHeader: {flexDirection: 'row', alignItems: 'center', gap: 12}, device: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, backgroundColor: '#17263A', borderRadius: 10, borderWidth: 1, borderColor: '#2A3C54', padding: 12}, deviceSelected: {borderColor: '#2DD4BF'}, deviceText: {flex: 1, gap: 3}, value: {color: '#FFF', flex: 1}, link: {color: '#2DD4BF', fontWeight: '700'}, columns: {flexDirection: 'row', gap: 8}, column: {flex: 1},
 });

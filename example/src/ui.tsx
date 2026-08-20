@@ -13,7 +13,14 @@ export function Row({label, value}: {label: string; value: string}) {
 }
 
 export function Button({label, onPress, secondary, disabled}: {label: string; onPress: () => void | Promise<void>; secondary?: boolean; disabled?: boolean}) {
-  return <TouchableOpacity disabled={disabled} style={[styles.button, secondary && styles.secondary, disabled && styles.disabled]} onPress={() => void onPress()}>
+  const handlePress = () => {
+    try {
+      void Promise.resolve(onPress()).catch(error => console.warn(`${label} failed`, error));
+    } catch (error) {
+      console.warn(`${label} failed`, error);
+    }
+  };
+  return <TouchableOpacity disabled={disabled} style={[styles.button, secondary && styles.secondary, disabled && styles.disabled]} onPress={handlePress}>
     <Text style={styles.buttonText}>{label}</Text>
   </TouchableOpacity>;
 }
