@@ -27,6 +27,7 @@ export interface EdgezBeaconConfig {
   intervalSeconds?: number;
   marker?: string;
   shareLocation?: boolean;
+  useDeviceGps?: boolean;
   latitude?: number;
   longitude?: number;
   locationTimestampMs?: number;
@@ -40,6 +41,7 @@ export interface EdgezMeshConfig {
   maxHop?: number;
   meshBandwidthMhz?: number;
   meshFrequencyKhz?: number;
+  enabledPublicChannels?: ReadonlySet<bigint>;
   beacon?: EdgezBeaconConfig;
 }
 
@@ -66,6 +68,8 @@ export interface EdgezMeshStatus {
   macAddress: bigint;
   licenseStatus: EdgezLicenseStatus;
   firmwareVersion: string;
+  publicChannelMask?: number;
+  supportsPublicChannelMask?: boolean;
 }
 
 export function isMeshUsable(status?: EdgezMeshStatus): boolean {
@@ -85,7 +89,9 @@ export interface EdgezMeshNode {
   deviceType: string;
   geoFenceName: string;
   geoIndex: number;
+  channelNumber?: number;
   sleeping: boolean;
+  enabled?: boolean;
 }
 
 export function edgezNodeId(nodeNum: bigint): string {
@@ -96,6 +102,42 @@ export function edgezNodeId(nodeNum: bigint): string {
 
 export function edgezNodeDisplayName(node: EdgezMeshNode): string {
   return node.displayName || edgezNodeId(node.nodeNum);
+}
+
+export const edgezPublicChannelPorts = [38801n, 38803n, 38805n, 38807n, 38809n] as const;
+export const edgezPublicChannelAllMask = (1 << edgezPublicChannelPorts.length) - 1;
+
+export function isEdgezPublicChannel(nodeNum: bigint): boolean {
+  return edgezPublicChannelPorts.includes(nodeNum as typeof edgezPublicChannelPorts[number]);
+}
+
+export function edgezPublicChannelMask(ports: Iterable<bigint>): number {
+  const enabled = new Set(ports);
+  return edgezPublicChannelPorts.reduce(
+    (mask, port, index) => enabled.has(port) ? mask | (1 << index) : mask,
+    0,
+  );
+}
+
+export function edgezPublicChannelsForMask(mask: number): ReadonlySet<bigint> {
+  return new Set(edgezPublicChannelPorts.filter((_, index) => !!(mask & (1 << index))));
+}
+
+export function edgezPublicChannelNode(channel: number, enabled = true): EdgezMeshNode {
+  if (channel < 1 || channel > edgezPublicChannelPorts.length) throw new RangeError('Unsupported public channel');
+  const nodeNum = edgezPublicChannelPorts[channel - 1]!;
+  return {
+    nodeNum, userUuid: nodeNum.toString(), displayName: `channel${channel}`,
+    route: 'PUBLIC', lastSeenMs: 0, marker: 'cyan', publicKey: new Uint8Array(),
+    deviceType: 'PublicChannel', geoFenceName: '', geoIndex: 0,
+    channelNumber: 0, sleeping: false, enabled,
+  };
+}
+
+export function edgezNodeOpensConversation(node: EdgezMeshNode): boolean {
+  if (isEdgezPublicChannel(node.nodeNum)) return true;
+  const type = node.deviceType.trim().toLowerCase();
+  return !type || type === 'unspecified' || type === 'user' || type === 'device_type_user';
 }
 
 export interface EdgezSensorData {
@@ -167,6 +209,7 @@ export interface EdgezDeviceSettings {
   beaconUnicast?: bigint;
   deviceType?: string;
   sleepModeEnabled?: boolean;
+  deviceGpsEnabled?: boolean;
   meshFrequencyKhz?: number;
   meshBandwidthMhz?: number;
   userIdHigh?: bigint;
@@ -233,6 +276,8 @@ export function mergeDiscovery(node: EdgezMeshNode, previous?: EdgezMeshNode): E
     deviceType: node.deviceType || previous?.deviceType || 'Unspecified',
     geoFenceName: node.geoFenceName || previous?.geoFenceName || '',
     geoIndex: node.geoIndex || previous?.geoIndex || 0,
+    channelNumber: node.channelNumber || previous?.channelNumber || 0,
+    enabled: previous?.enabled ?? node.enabled,
   };
 }
 

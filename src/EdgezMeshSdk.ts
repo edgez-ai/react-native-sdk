@@ -16,6 +16,8 @@ import {
   type EdgezVoiceRecording,
   bytesFromNative,
   currentSdkRelease,
+  edgezPublicChannelMask,
+  edgezPublicChannelPorts,
   edgezNodeDisplayName,
 } from './models';
 import {decodeBeacon, encodeNetworkPacket, Interface, Mime, Operation, type ProtocolObject} from './protocol';
@@ -205,6 +207,8 @@ export class EdgezMeshSdk {
       meshBandwidthMhz: clamp(config.meshBandwidthMhz ?? 0, 0, 8), meshFrequencyKhz: Math.max(0, config.meshFrequencyKhz ?? 0),
       sdkCompatibility: this.releaseCredential.compatibility, sdkReleaseId: this.releaseCredential.releaseId,
       sdkReleaseSignature: this.releaseCredential.signature,
+      publicChannelMask: edgezPublicChannelMask(config.enabledPublicChannels ?? new Set(edgezPublicChannelPorts)),
+      hasPublicChannelMask: true,
     }});
     await this.transport.invoke('initializeMesh', {packet: Array.from(packet)});
   }
@@ -212,6 +216,16 @@ export class EdgezMeshSdk {
   authorizeSession(): Promise<void> {
     return this.sendPacket('SDK license authorization', {operation: Operation.request, interface: Interface.halow, init: {
       sdkCompatibility: this.releaseCredential.compatibility, sdkReleaseId: this.releaseCredential.releaseId, sdkReleaseSignature: this.releaseCredential.signature,
+    }});
+  }
+
+  updatePublicChannels(enabledPorts: Iterable<bigint>): Promise<void> {
+    return this.sendPacket('Public channel subscriptions', {operation: Operation.request, interface: Interface.halow, init: {
+      sdkCompatibility: this.releaseCredential.compatibility,
+      sdkReleaseId: this.releaseCredential.releaseId,
+      sdkReleaseSignature: this.releaseCredential.signature,
+      publicChannelMask: edgezPublicChannelMask(enabledPorts),
+      hasPublicChannelMask: true,
     }});
   }
 
@@ -228,6 +242,8 @@ export class EdgezMeshSdk {
       upstreamWifiSsid: take(settings.upstreamWifiSsid ?? '', 32), upstreamWifiPassphrase: take(settings.upstreamWifiPassphrase ?? '', 64),
       beaconUnicast: u64(settings.beaconUnicast ?? 0n), deviceType: deviceType(settings.deviceType ?? 'relay'), sleepModeEnabled: settings.sleepModeEnabled ?? false,
       meshFrequencyKhz: Math.max(0, settings.meshFrequencyKhz ?? 0), meshBandwidthMhz: clamp(settings.meshBandwidthMhz ?? 0, 0, 8),
+      deviceGpsEnabled: settings.deviceGpsEnabled ?? false,
+      ...(settings.geoFenceName?.trim() ? {geoFence: {name: take(settings.geoFenceName.trim(), 64), marker: markerColor(settings.marker ?? 'green'), geoIndex: settings.geoIndex ?? 0}} : {}),
       ...(identity ? {userIdHigh: u64(identity.userIdHigh), userIdLow: u64(identity.userIdLow), userPublicKey: identity.publicKey, userPrivateKey: identity.privateKey} : {}),
     }};
     return this.sendPacket('Device settings update', packet, 3000);

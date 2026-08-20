@@ -3,7 +3,11 @@ import type {
   EdgezMeshConfig, EdgezMeshEvent, EdgezMeshNode, EdgezMeshStatus, EdgezSensorData,
   EdgezSensorSample, EdgezTopologyLink, EdgezVoiceCallState,
 } from './models';
-import {bytesFromNative, emptyVoiceCall, mergeDiscovery} from './models';
+import {
+  bytesFromNative, edgezPublicChannelAllMask, edgezPublicChannelMask,
+  edgezPublicChannelNode, edgezPublicChannelPorts, emptyVoiceCall,
+  isEdgezPublicChannel, mergeDiscovery,
+} from './models';
 import {EdgezMeshSdk} from './EdgezMeshSdk';
 import {decodeNetworkPacket, Mime, Operation, type ProtocolObject} from './protocol';
 
@@ -32,8 +36,12 @@ export interface EdgezMeshSessionOptions {
   onIncomingCall?: (call: EdgezVoiceCallState, caller: EdgezMeshNode) => void;
 }
 
+const publicChannelNodes = (): Map<bigint, EdgezMeshNode> => new Map(
+  edgezPublicChannelPorts.map((port, index) => [port, edgezPublicChannelNode(index + 1)]),
+);
+
 const initialState = (): EdgezMeshState => ({
-  connection: 'none', bleDevices: new Map(), nodes: new Map(), sensorSamples: new Map(), topologyLinks: [], conversations: new Map(),
+  connection: 'none', bleDevices: new Map(), nodes: publicChannelNodes(), sensorSamples: new Map(), topologyLinks: [], conversations: new Map(),
   otaInProgress: false, otaReady: false, otaSentBytes: 0, otaTotalBytes: 0, voiceCall: emptyVoiceCall,
   statusLine: 'Connect with BLE, then save mesh settings.', bleReady: false, bleConnecting: false,
 });
@@ -68,7 +76,7 @@ export class EdgezMeshSession {
   endProvisioning(): void { this.provisioning = false; }
 
   restoreCachedMeshData(data: Partial<Pick<EdgezMeshState, 'nodes'|'sensorSamples'|'topologyLinks'|'conversations'>>): void {
-    this.setState({...this.current, ...data, statusLine: 'Restored cached mesh data'});
+    this.setState({...this.current, ...data, nodes: new Map([...publicChannelNodes().entries(), ...(data.nodes ?? this.current.nodes).entries()]), statusLine: 'Restored cached mesh data'});
   }
 
   async startBleScan(): Promise<void> {
@@ -84,10 +92,29 @@ export class EdgezMeshSession {
   }
 
   async disconnect(): Promise<void> { await this.sdk.disconnect(); this.setState({...initialState(), bleDevices: this.current.bleDevices, statusLine: 'BLE disconnected'}); }
-  async initializeMesh(config: EdgezMeshConfig): Promise<void> { this.config = config; await this.sendInitIfReady(true); }
+  async initializeMesh(config: EdgezMeshConfig): Promise<void> {
+    this.config = config;
+    const enabled = config.enabledPublicChannels ?? new Set(edgezPublicChannelPorts);
+    const nodes = new Map(this.current.nodes);
+    for (const [index, port] of edgezPublicChannelPorts.entries()) {
+      nodes.set(port, {...nodes.get(port) ?? edgezPublicChannelNode(index + 1), enabled: enabled.has(port)});
+    }
+    this.setState({...this.current, nodes});
+    await this.sendInitIfReady(true);
+  }
   async authorizeSession(): Promise<void> { await this.sdk.authorizeSession(); this.setStatus('SDK authorization requested'); }
   async requestDeviceSettings(): Promise<void> { await this.sdk.requestDeviceSettings(); this.setStatus('Device settings requested'); }
   async sendDeviceSettings(settings: EdgezDeviceSettings, identity?: EdgezMeshConfig['identity']): Promise<void> { await this.sdk.sendDeviceSettings(settings, identity); this.setStatus('Device settings sent'); }
+  get enabledPublicChannels(): ReadonlySet<bigint> { return new Set(edgezPublicChannelPorts.filter(port => this.current.nodes.get(port)?.enabled !== false)); }
+  async setPublicChannelEnabled(port: bigint, enabled: boolean): Promise<void> {
+    if (!isEdgezPublicChannel(port)) throw new Error('Unsupported public channel');
+    const nodes = new Map(this.current.nodes);
+    const current = nodes.get(port) ?? edgezPublicChannelNode(edgezPublicChannelPorts.indexOf(port as typeof edgezPublicChannelPorts[number]) + 1);
+    nodes.set(port, {...current, enabled});
+    if (this.config) this.config = {...this.config, enabledPublicChannels: new Set(edgezPublicChannelPorts.filter(value => nodes.get(value)?.enabled !== false))};
+    this.setState({...this.current, nodes, statusLine: `${current.displayName} ${enabled ? 'enabled' : 'disabled'}`});
+    if (this.current.bleReady) await this.sdk.updatePublicChannels(this.enabledPublicChannels);
+  }
 
   async performOta(image: Uint8Array): Promise<string> {
     this.setState({...this.current, otaInProgress: true, otaSentBytes: 0, otaTotalBytes: image.length, statusLine: 'Starting firmware update'});
@@ -115,7 +142,7 @@ export class EdgezMeshSession {
     this.appendMessage(message); return message;
   }
   playVoiceMessage(message: EdgezConversationMessage): Promise<void> { return this.sdk.playVoiceMessage(message); }
-  removeNode(nodeNum: bigint): void { const nodes = new Map(this.current.nodes); nodes.delete(nodeNum); const sensorSamples = new Map(this.current.sensorSamples); sensorSamples.delete(nodeNum); this.setState({...this.current, nodes, sensorSamples, statusLine: 'Node removed'}); }
+  removeNode(nodeNum: bigint): void { if (isEdgezPublicChannel(nodeNum)) return; const nodes = new Map(this.current.nodes); nodes.delete(nodeNum); const sensorSamples = new Map(this.current.sensorSamples); sensorSamples.delete(nodeNum); this.setState({...this.current, nodes, sensorSamples, statusLine: 'Node removed'}); }
 
   private async sendInitIfReady(force = false): Promise<void> {
     if (!this.config) return;
@@ -154,11 +181,17 @@ export class EdgezMeshSession {
 
   private handleStatus(status: ProtocolObject): void {
     const licenses = ['unspecified','authorized','deviceNotLicensed','sdkReleaseRequired','sdkVersionIncompatible','sdkReleaseInvalid'] as const;
-    this.setState({...this.current, status: {supported: !!status.supported, stackInitialized: !!status.stackInitialized, meshMode: !!status.meshMode, linkUp: !!status.linkUp, routeReady: !!status.routeReady, readyForReport: !!status.readyForReport, meshId: string(status.meshId), ipAddress: string(status.ipAddr), gateway: string(status.gateway), macAddress: bi(status.macAddress), licenseStatus: licenses[num(status.licenseStatus)] ?? 'unspecified', firmwareVersion: string(status.firmwareVersion)}, statusLine: 'Device status received'});
+    const supportsPublicChannelMask = status.publicChannelMask !== undefined;
+    const publicChannelMask = supportsPublicChannelMask ? num(status.publicChannelMask) : edgezPublicChannelAllMask;
+    this.setState({...this.current, status: {supported: !!status.supported, stackInitialized: !!status.stackInitialized, meshMode: !!status.meshMode, linkUp: !!status.linkUp, routeReady: !!status.routeReady, readyForReport: !!status.readyForReport, meshId: string(status.meshId), ipAddress: string(status.ipAddr), gateway: string(status.gateway), macAddress: bi(status.macAddress), licenseStatus: licenses[num(status.licenseStatus)] ?? 'unspecified', firmwareVersion: string(status.firmwareVersion), publicChannelMask, supportsPublicChannelMask}, statusLine: 'Device status received'});
+    const desiredMask = edgezPublicChannelMask(this.enabledPublicChannels);
+    if (supportsPublicChannelMask && publicChannelMask !== desiredMask && this.current.bleReady) {
+      void this.sdk.updatePublicChannels(this.enabledPublicChannels).catch(error => this.setStatus(`Public channel update failed: ${error}`));
+    }
   }
 
   private handleDeviceSettings(value: ProtocolObject): void {
-    this.setState({...this.current, deviceSettings: {deviceModeEnabled: !!value.deviceModeEnabled, meshId: string(value.meshId), shareLocation: !!value.shareLocation, userName: string(value.userName), marker: marker(num(value.marker)), beaconIntervalSeconds: num(value.beaconIntervalSeconds), maxHop: num(value.maxHop), latitude: value.latitude === undefined ? undefined : num(value.latitude), longitude: value.longitude === undefined ? undefined : num(value.longitude), geoIndex: num(value.geoIndex), uartI2cSensorType: string(value.uartI2cSensorType), rs485SensorType: string(value.rs485SensorType), passphrase: string(value.passphrase), upstreamWifiSsid: string(value.upstreamWifiSsid), upstreamWifiPassphrase: string(value.upstreamWifiPassphrase), beaconUnicast: bi(value.beaconUnicast), deviceType: deviceType(num(value.deviceType)).toLowerCase(), sleepModeEnabled: !!value.sleepModeEnabled, meshFrequencyKhz: num(value.meshFrequencyKhz), meshBandwidthMhz: num(value.meshBandwidthMhz), userIdHigh: bi(value.userIdHigh), userIdLow: bi(value.userIdLow), userPublicKey: bytesFromNative(value.userPublicKey), userPrivateKey: bytesFromNative(value.userPrivateKey)}, statusLine: 'Device settings received'});
+    this.setState({...this.current, deviceSettings: {deviceModeEnabled: !!value.deviceModeEnabled, meshId: string(value.meshId), shareLocation: !!value.shareLocation, userName: string(value.userName), marker: marker(num(value.marker)), beaconIntervalSeconds: num(value.beaconIntervalSeconds), maxHop: num(value.maxHop), latitude: value.latitude === undefined ? undefined : num(value.latitude), longitude: value.longitude === undefined ? undefined : num(value.longitude), geoFenceName: string((value.geoFence as ProtocolObject | undefined)?.name), geoIndex: num((value.geoFence as ProtocolObject | undefined)?.geoIndex ?? value.geoIndex), uartI2cSensorType: string(value.uartI2cSensorType), rs485SensorType: string(value.rs485SensorType), passphrase: string(value.passphrase), upstreamWifiSsid: string(value.upstreamWifiSsid), upstreamWifiPassphrase: string(value.upstreamWifiPassphrase), beaconUnicast: bi(value.beaconUnicast), deviceType: deviceType(num(value.deviceType)).toLowerCase(), sleepModeEnabled: !!value.sleepModeEnabled, deviceGpsEnabled: !!value.deviceGpsEnabled, meshFrequencyKhz: num(value.meshFrequencyKhz), meshBandwidthMhz: num(value.meshBandwidthMhz), userIdHigh: bi(value.userIdHigh), userIdLow: bi(value.userIdLow), userPublicKey: bytesFromNative(value.userPublicKey), userPrivateKey: bytesFromNative(value.userPrivateKey)}, statusLine: 'Device settings received'});
   }
 
   private handleReport(packet: ProtocolObject): void {
@@ -172,7 +205,7 @@ export class EdgezMeshSession {
   private handleBeacon(packet: ProtocolObject, beacon: ProtocolObject): void {
     const nodeNum = bi(packet.from); if (!nodeNum) return;
     if (this.current.status?.macAddress === nodeNum) return;
-    const node: EdgezMeshNode = {nodeNum, userUuid: uuidFromParts(bi(beacon.userIdHigh), bi(beacon.userIdLow)), displayName: string(beacon.userName), route: this.current.connection.toUpperCase(), lastSeenMs: Date.now(), marker: marker(num(beacon.marker)), publicKey: bytesFromNative(beacon.userPublicKey), latitude: beacon.latitude ? num(beacon.latitude) : undefined, longitude: beacon.longitude ? num(beacon.longitude) : undefined, deviceType: deviceType(num(beacon.deviceType)), geoFenceName: string((beacon.geoFence as ProtocolObject | undefined)?.name), geoIndex: num((beacon.geoFence as ProtocolObject | undefined)?.geoIndex), sleeping: !!beacon.sleeping};
+    const node: EdgezMeshNode = {nodeNum, userUuid: uuidFromParts(bi(beacon.userIdHigh), bi(beacon.userIdLow)), displayName: string(beacon.userName), route: this.current.connection.toUpperCase(), lastSeenMs: Date.now(), marker: marker(num(beacon.marker)), publicKey: bytesFromNative(beacon.userPublicKey), latitude: beacon.latitude ? num(beacon.latitude) : undefined, longitude: beacon.longitude ? num(beacon.longitude) : undefined, deviceType: deviceType(num(beacon.deviceType)), geoFenceName: string((beacon.geoFence as ProtocolObject | undefined)?.name), geoIndex: num((beacon.geoFence as ProtocolObject | undefined)?.geoIndex), channelNumber: num(beacon.channelNumber), sleeping: !!beacon.sleeping, enabled: true};
     const nodes = new Map(this.current.nodes); const merged = mergeDiscovery(node, nodes.get(nodeNum)); nodes.set(nodeNum, merged);
     const sensor = sensorData(beacon); const samples = new Map(this.current.sensorSamples); if (sensor) samples.set(nodeNum, [...samples.get(nodeNum) ?? [], {nodeNum, timestampMs: Date.now(), data: sensor}]);
     this.setState({...this.current, nodes, sensorSamples: samples, statusLine: `Beacon received from ${merged.displayName || nodeNum.toString(16)}`});

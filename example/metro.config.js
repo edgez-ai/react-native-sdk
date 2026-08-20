@@ -11,5 +11,25 @@ const config = getDefaultConfig(projectRoot);
 // example. This also ensures React and React Native have only one instance.
 config.watchFolders = [...new Set([...config.watchFolders, sdkRoot])];
 config.resolver.nodeModulesPaths = [path.join(projectRoot, 'node_modules')];
+// Modules imported by ../src would otherwise resolve hierarchically from the
+// SDK repository first. Pin runtime singletons to the Expo app so Metro never
+// bundles the SDK's development copy of React Native or a separate native-
+// module wrapper whose registry does not match the installed application.
+const singletonPackages = [
+  'react',
+  'react-native',
+  '@react-native-async-storage/async-storage',
+];
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  const packageName = singletonPackages.find(
+    name => moduleName === name || moduleName.startsWith(`${name}/`),
+  );
+  if (packageName) {
+    const subpath = moduleName.slice(packageName.length);
+    const appModule = path.join(projectRoot, 'node_modules', packageName, subpath);
+    return context.resolveRequest(context, appModule, platform);
+  }
+  return context.resolveRequest(context, moduleName, platform);
+};
 
 module.exports = config;

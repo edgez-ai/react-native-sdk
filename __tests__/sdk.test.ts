@@ -19,7 +19,7 @@ describe('EdgezMeshSdk packet API', () => {
     const call = transport.calls[0]!;
     const packet = decodeNetworkPacket(Uint8Array.from(call.arguments_!.packet as number[]));
     expect(call.method).toBe('initializeMesh');
-    expect(packet.init).toMatchObject({countryCode: 'SE', marker: 'teal', hasLocation: true, meshBandwidthMhz: 4, meshFrequencyKhz: 915000, sdkCompatibility: '^0.5.0'});
+    expect(packet.init).toMatchObject({countryCode: 'SE', marker: 'teal', hasLocation: true, meshBandwidthMhz: 4, meshFrequencyKhz: 915000, sdkCompatibility: '^0.5.0', publicChannelMask: 31, hasPublicChannelMask: true});
   });
 
   it('uploads drivers as begin, 220-byte chunks, commit', async () => {

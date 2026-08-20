@@ -2,8 +2,10 @@
 
 This app follows the Expo development-client structure used by
 `template-iot-prov`. It demonstrates BLE discovery and connection, mesh
-initialization, discovered nodes, encrypted conversations, device settings,
-and OTA capability checks.
+initialization, encrypted conversations, device settings, and OTA capability
+checks. The Nodes and Settings tabs mirror the Flutter example's channel-grouped
+node list, public talkgroups, routes, user/location setup, mesh configuration,
+device GPS/geofence, sensor, upstream Wi-Fi, and sleep controls.
 
 Expo Go cannot load the EdgeZ Android native module. Build a development
 client once, then use the normal Expo development server:

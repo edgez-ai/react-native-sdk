@@ -90,9 +90,12 @@ npm run android   # creates and installs the native Expo development build
 npm run start     # later JavaScript-only iterations
 ```
 
-The example includes BLE connection, mesh status, discovered nodes, encrypted
-text and recorded voice messages, notification permission, mesh configuration,
-device-settings requests, and OTA readiness.
+The example includes BLE connection, mesh status, encrypted text and recorded
+voice messages, notification permission, and OTA readiness. Its Flutter-aligned
+Nodes tab groups discovered devices by HaLow channel, manages the five public
+talkgroups, shows routes and node details, and exposes channel selection. The
+Settings tab includes user identity/location, country/bandwidth/channel setup,
+and device GPS, geofence, sensor, upstream network, and sleep controls.
 
 ## Development
 

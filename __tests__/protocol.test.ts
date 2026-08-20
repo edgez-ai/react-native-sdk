@@ -1,5 +1,11 @@
 import {decodeNetworkPacket, encodeNetworkPacket, Interface, Operation} from '../src/protocol';
 import {EdgezOtaRelease} from '../src/ota';
+import {
+  edgezPublicChannelMask,
+  edgezPublicChannelPorts,
+  edgezPublicChannelsForMask,
+  isEdgezPublicChannel,
+} from '../src/models';
 
 describe('EdgeZ protocol compatibility', () => {
   it('round-trips current initialization fields and uint64 values', () => {
@@ -16,6 +22,35 @@ describe('EdgeZ protocol compatibility', () => {
     const packet = decodeNetworkPacket(encodeNetworkPacket({from: '256', operation: Operation.broadcast, interface: Interface.halow, report: {peers: [{id: '512', rssi: 934}, {id: '768', rssi: 1000}]}}));
     expect(packet.report.peers).toHaveLength(2);
     expect(packet.report.peers[0]).toMatchObject({id: '512', rssi: 934});
+  });
+
+  it('round-trips node channels, public-channel status, and device GPS settings', () => {
+    const packet = decodeNetworkPacket(encodeNetworkPacket({
+      status: {publicChannelMask: 0b10101},
+      operation: Operation.response,
+      interface: Interface.halow,
+    }));
+    expect(packet.status.publicChannelMask).toBe(0b10101);
+
+    const beacon = decodeNetworkPacket(encodeNetworkPacket({
+      from: '42', beacon: {channelNumber: 11}, operation: Operation.broadcast, interface: Interface.halow,
+    }));
+    expect(beacon.beacon.channelNumber).toBe(11);
+
+    const settings = decodeNetworkPacket(encodeNetworkPacket({
+      deviceSettings: {deviceGpsEnabled: true, geoFence: {name: 'Warehouse', geoIndex: 3}},
+      operation: Operation.response,
+      interface: Interface.halow,
+    }));
+    expect(settings.deviceSettings).toMatchObject({deviceGpsEnabled: true, geoFence: {name: 'Warehouse', geoIndex: 3}});
+  });
+
+  it('maps Flutter-compatible public talkgroup ports to mask bits', () => {
+    const selected = [edgezPublicChannelPorts[0], edgezPublicChannelPorts[2], edgezPublicChannelPorts[4]];
+    expect(edgezPublicChannelMask(selected)).toBe(0b10101);
+    expect([...edgezPublicChannelsForMask(0b10101)]).toEqual(selected);
+    expect(isEdgezPublicChannel(38803n)).toBe(true);
+    expect(isEdgezPublicChannel(38802n)).toBe(false);
   });
 });
 
