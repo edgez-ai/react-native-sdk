@@ -83,8 +83,10 @@ FindBleAssociationEndpointAsync(uint64_t address) {
     Enumeration::DeviceInformationKind::AssociationEndpoint);
   auto expectedAddress = AddressString(address);
   for (auto const &candidate : devices) {
-    auto value = candidate.Properties().TryLookup(L"System.Devices.Aep.DeviceAddress");
-    auto candidateAddress = value ? winrt::unbox_value_or<winrt::hstring>(value, L"") : L"";
+    auto candidateProperties = candidate.Properties();
+    if (!candidateProperties.HasKey(L"System.Devices.Aep.DeviceAddress")) continue;
+    auto value = candidateProperties.Lookup(L"System.Devices.Aep.DeviceAddress");
+    auto candidateAddress = winrt::unbox_value_or<winrt::hstring>(value, winrt::hstring{});
     if (NormalizeBluetoothAddress(winrt::to_string(candidateAddress)) == expectedAddress) co_return candidate;
   }
   co_return Enumeration::DeviceInformation{nullptr};
@@ -197,21 +199,56 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
         co_return;
       } else {
         EmitLog("Requesting the Windows native BLE pairing dialog");
-        auto pairingResult = co_await pairing.PairAsync(
-          Enumeration::DevicePairingProtectionLevel::EncryptionAndAuthentication);
-        if (!isCurrentConnection()) { promise.Reject("BLE disconnected during pairing"); co_return; }
-        auto status = pairingResult.Status();
-        EmitLog("Windows BLE pairing completed; status=" +
-          std::to_string(static_cast<int32_t>(status)));
-        if (status != Enumeration::DevicePairingResultStatus::Paired &&
-            status != Enumeration::DevicePairingResultStatus::AlreadyPaired) {
-          promise.Reject(("Windows BLE pairing failed; status=" +
-            std::to_string(static_cast<int32_t>(status))).c_str());
+        auto uiDispatcher = m_context.UIDispatcher();
+        if (!uiDispatcher) {
+          promise.Reject("Windows UI dispatcher is unavailable for BLE pairing");
           Close(true);
           co_return;
         }
-        co_await winrt::resume_after(std::chrono::milliseconds(750));
-        if (!isCurrentConnection()) { promise.Reject("BLE disconnected after pairing"); co_return; }
+        uiDispatcher.Post([this, address, pairing, promise, connectionGeneration]() mutable {
+          try {
+            EmitLog("Starting Windows BLE pairing on the UI dispatcher");
+            auto operation = pairing.PairAsync(
+              Enumeration::DevicePairingProtectionLevel::EncryptionAndAuthentication);
+            operation.Completed(
+              [this, address, promise, connectionGeneration](
+                  Windows::Foundation::IAsyncOperation<Enumeration::DevicePairingResult> const &completedOperation,
+                  Windows::Foundation::AsyncStatus asyncStatus) mutable {
+                if (connectionGeneration != m_connectionGeneration.load(std::memory_order_acquire)) {
+                  promise.Reject("BLE pairing attempt was superseded");
+                  return;
+                }
+                try {
+                  if (asyncStatus != Windows::Foundation::AsyncStatus::Completed) {
+                    throw winrt::hresult_error(completedOperation.ErrorCode());
+                  }
+                  auto pairingResult = completedOperation.GetResults();
+                  auto status = pairingResult.Status();
+                  EmitLog("Windows BLE pairing completed; status=" +
+                    std::to_string(static_cast<int32_t>(status)));
+                  if (status != Enumeration::DevicePairingResultStatus::Paired &&
+                      status != Enumeration::DevicePairingResultStatus::AlreadyPaired) {
+                    promise.Reject(("Windows BLE pairing failed; status=" +
+                      std::to_string(static_cast<int32_t>(status))).c_str());
+                    Close(true);
+                    return;
+                  }
+                  // Re-enter connection setup with a fresh BluetoothLEDevice
+                  // object after Windows has committed the new association.
+                  ConnectAsync(address, promise, false);
+                } catch (winrt::hresult_error const &error) {
+                  EmitLog("Windows BLE pairing failed: " + winrt::to_string(error.message()));
+                  promise.Reject(error.message().c_str());
+                  Close(true);
+                }
+              });
+          } catch (winrt::hresult_error const &error) {
+            EmitLog("Windows BLE pairing could not start: " + winrt::to_string(error.message()));
+            promise.Reject(error.message().c_str());
+            Close(true);
+          }
+        });
+        co_return;
       }
     } else {
       usedExistingAssociation = true;

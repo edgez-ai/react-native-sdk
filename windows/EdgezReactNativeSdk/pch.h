@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <coroutine>
 #include <ctime>
 #include <exception>
