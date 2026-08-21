@@ -5,8 +5,10 @@ import {EdgezMeshSession} from '../src/EdgezMeshSession';
 
 class FakeTransport implements EdgezPlatformTransport {
   calls: Array<{method: string; arguments_?: Record<string, unknown>}> = [];
+  listener?: (event: EdgezMeshEvent) => void;
   async invoke<T>(method: string, arguments_?: Record<string, unknown>): Promise<T> { this.calls.push({method, arguments_}); return undefined as T; }
-  subscribe(_listener: (event: EdgezMeshEvent) => void): () => void { return () => {}; }
+  subscribe(listener: (event: EdgezMeshEvent) => void): () => void { this.listener = listener; return () => { this.listener = undefined; }; }
+  emit(event: EdgezMeshEvent): void { this.listener?.(event); }
 }
 
 const identity: EdgezUserIdentity = {userUuid: '00000000-0000-4000-8000-000000000016', userIdHigh: 11n, userIdLow: 22n, name: 'Protocol User', privateKey: new Uint8Array(32), publicKey: Uint8Array.from([1,2,3,4])};
@@ -40,6 +42,25 @@ describe('EdgezMeshSession voice assembly', () => {
     expect(store(42n, {...base, index: 2, audio: Uint8Array.of(5, 6)})).toBeUndefined();
     expect(store(42n, {...base, index: 0, audio: Uint8Array.of(1, 2)})).toBeUndefined();
     expect(Array.from(store(42n, {...base, index: 1, audio: Uint8Array.of(3, 4)})!.bytes)).toEqual([1, 2, 3, 4, 5, 6]);
+    session.dispose();
+  });
+});
+
+describe('EdgezMeshSession BLE recovery', () => {
+  it('resends HaLow INIT whenever a recovered control channel becomes ready', async () => {
+    const transport = new FakeTransport();
+    const session = new EdgezMeshSession({sdk: new EdgezMeshSdk({transport})});
+    await session.initializeMesh({identity, countryCode: 'US', meshId: 'edgez', passphrase: 'edgez123'});
+
+    transport.emit({type: 'connection', connection: 'ble'});
+    transport.emit({type: 'ready'});
+    await Promise.resolve(); await Promise.resolve();
+    expect(transport.calls.filter(call => call.method === 'initializeMesh')).toHaveLength(1);
+
+    transport.emit({type: 'connection', connection: 'ble'});
+    transport.emit({type: 'ready'});
+    await Promise.resolve(); await Promise.resolve();
+    expect(transport.calls.filter(call => call.method === 'initializeMesh')).toHaveLength(2);
     session.dispose();
   });
 });

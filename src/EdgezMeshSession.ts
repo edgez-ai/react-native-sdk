@@ -89,8 +89,17 @@ export class EdgezMeshSession {
   async stopBleScan(): Promise<void> { await this.sdk.stopBleScan(); this.setStatus('BLE scan stopped'); }
 
   async connectBle(deviceId: string): Promise<void> {
-    this.setState({...this.current, bleConnecting: true, status: undefined, deviceSettings: undefined, statusLine: `Starting BLE connection to ${deviceId}`});
-    try { await this.sdk.connectBle(deviceId); this.setState({...this.current, bleReady: false, statusLine: 'BLE connection requested; waiting for the control service'}); }
+    // Firmware authorization and HaLow initialization live in RAM. Every new
+    // BLE control channel must send INIT again, even when its config is unchanged.
+    this.lastInitKey = undefined;
+    this.setState({...this.current, bleConnecting: true, bleReady: false, status: undefined, deviceSettings: undefined, statusLine: `Starting BLE connection to ${deviceId}`});
+    try {
+      await this.sdk.connectBle(deviceId);
+      // Windows resolves connectBle after emitting ready, whereas Android
+      // resolves while GATT setup is still running. Do not overwrite a ready
+      // event that arrived before this promise completed.
+      if (!this.current.bleReady) this.setState({...this.current, statusLine: 'BLE connection requested; waiting for the control service'});
+    }
     catch (error) { this.setState({...this.current, bleConnecting: false, statusLine: `BLE connect failed: ${error}`}); throw error; }
   }
 
@@ -158,6 +167,10 @@ export class EdgezMeshSession {
     try {
       await this.sdk.initializeMesh(this.config); this.lastInitKey = initKey; this.setStatus('Device initialization sent; requesting status');
       await this.sdk.requestDeviceSettings();
+    } catch (error) {
+      // Keep the key unset so the next ready/recovery event can retry INIT.
+      this.lastInitKey = undefined;
+      this.setStatus(`Device initialization failed: ${error}`);
     } finally {
       this.initInFlight = false;
       if (this.initRetryRequested) {
@@ -181,11 +194,14 @@ export class EdgezMeshSession {
     switch (event.type) {
       case 'connection': {
         const connection = event.connection ?? 'none';
-        if (connection === 'none') this.lastInitKey = undefined;
+        // A recovered Windows association creates a new firmware transport
+        // session even if the app never observed the failed attempt as ready.
+        // Never carry INIT deduplication across that transport boundary.
+        this.lastInitKey = undefined;
         this.setState({...this.current, connection, bleConnecting: false, bleReady: connection === 'none' ? false : this.current.bleReady, status: connection === 'none' ? undefined : this.current.status, statusLine: connection === 'ble' ? 'BLE link connected; setting up control channel' : 'BLE disconnected'}); break;
       }
       case 'bleDevice': if (event.bleDevice) { const devices = new Map(this.current.bleDevices); devices.set(event.bleDevice.id, event.bleDevice); this.setState({...this.current, bleDevices: devices, statusLine: `Found ${event.bleDevice.name || event.bleDevice.id}`}); } break;
-      case 'ready': this.setState({...this.current, bleReady: true, statusLine: 'BLE control channel ready; requesting device status'}); void this.sdk.isOtaReady().then(otaReady => this.setState({...this.current, otaReady})); if (!this.provisioning) void this.sendInitIfReady(); break;
+      case 'ready': this.setState({...this.current, bleReady: true, statusLine: 'BLE control channel ready; requesting device status'}); void this.sdk.isOtaReady().then(otaReady => this.setState({...this.current, otaReady})); if (!this.provisioning) void this.sendInitIfReady(true); break;
       case 'packet': if (event.packet?.length) await this.handlePacket(event.packet); break;
       case 'otaProgress': { const sent = event.sentBytes ?? 0, total = event.totalBytes ?? 0; this.setState({...this.current, otaInProgress: true, otaSentBytes: sent, otaTotalBytes: total, statusLine: total ? `Installing firmware: ${Math.floor(sent / total * 100)}%` : 'Installing firmware'}); break; }
       case 'log': this.setStatus(event.log ?? ''); break;
