@@ -77,9 +77,11 @@ struct EdgezReactNativeSdk
 private:
   void Emit(React::JSValueObject &&event) noexcept;
   void EmitLog(std::string const &message) noexcept;
-  void QueuePacket(React::JSValueObject const &arguments, React::ReactPromise<void> const &promise) noexcept;
+  void QueuePacket(React::JSValueObject const &arguments, React::ReactPromise<void> const &promise,
+                   bool optimizeConnectionAfterWrite) noexcept;
   winrt::fire_and_forget ConnectAsync(uint64_t address, React::ReactPromise<void> promise) noexcept;
-  winrt::fire_and_forget WriteFrameAsync(std::vector<uint8_t> frame, React::ReactPromise<void> promise) noexcept;
+  winrt::fire_and_forget WriteFrameAsync(std::vector<uint8_t> frame, React::ReactPromise<void> promise,
+                                         bool optimizeConnectionAfterWrite) noexcept;
   void HandleValue(Windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic const &sender,
                    Windows::Devices::Bluetooth::GenericAttributeProfile::GattValueChangedEventArgs const &args) noexcept;
   void AppendFrame(std::vector<uint8_t> const &bytes, std::vector<uint8_t> &accumulator, std::string const &route) noexcept;
@@ -91,9 +93,15 @@ private:
   Windows::Devices::Bluetooth::BluetoothLEPreferredConnectionParametersRequest m_preferredConnectionRequest{nullptr};
   winrt::event_token m_connectionStatusToken{};
   bool m_hasConnectionStatusHandler{false};
+  winrt::event_token m_connectionParametersToken{};
+  bool m_hasConnectionParametersHandler{false};
+  winrt::event_token m_connectionPhyToken{};
+  bool m_hasConnectionPhyHandler{false};
   std::atomic_uint64_t m_connectionGeneration{0};
   Windows::Devices::Bluetooth::GenericAttributeProfile::GattDeviceService m_service{nullptr};
   Windows::Devices::Bluetooth::GenericAttributeProfile::GattSession m_session{nullptr};
+  winrt::event_token m_sessionStatusToken{};
+  bool m_hasSessionStatusHandler{false};
   Windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic m_rx{nullptr};
   Windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic m_ota{nullptr};
   std::vector<Windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic> m_notifications;

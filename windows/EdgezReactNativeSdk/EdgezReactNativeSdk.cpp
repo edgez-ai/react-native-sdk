@@ -71,6 +71,26 @@ static Streams::IBuffer Buffer(std::vector<uint8_t> const &bytes) {
   return writer.DetachBuffer();
 }
 
+static std::string ConnectionParametersDescription(Bluetooth::BluetoothLEDevice const &device) {
+  auto parameters = device.GetConnectionParameters();
+  return "interval=" + std::to_string(parameters.ConnectionInterval()) +
+    " latency=" + std::to_string(parameters.ConnectionLatency()) +
+    " timeout=" + std::to_string(parameters.LinkTimeout());
+}
+
+static std::string PhyInfoDescription(Bluetooth::BluetoothLEConnectionPhyInfo const &info) {
+  if (info.IsUncoded2MPhy()) return "2M";
+  if (info.IsUncoded1MPhy()) return "1M";
+  if (info.IsCodedPhy()) return "coded";
+  return "unknown";
+}
+
+static std::string ConnectionPhyDescription(Bluetooth::BluetoothLEDevice const &device) {
+  auto phy = device.GetConnectionPhy();
+  return "tx=" + PhyInfoDescription(phy.TransmitInfo()) +
+    " rx=" + PhyInfoDescription(phy.ReceiveInfo());
+}
+
 std::string RNGetRandomValues::GetRandomBase64(double byteLength) noexcept {
   try {
     auto length = static_cast<uint32_t>(std::clamp(byteLength, 0.0, 65536.0));
@@ -224,6 +244,20 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     auto session = service.Session();
     if (session) session.MaintainConnection(true);
 
+    if (session) {
+      // Retain the session before registering its callback so every failure
+      // path can revoke the handler and close the native connection cleanly.
+      m_session = session;
+      m_sessionStatusToken = session.SessionStatusChanged(
+        [this, connectionGeneration](Gatt::GattSession const &, Gatt::GattSessionStatusChangedEventArgs const &args) {
+          if (connectionGeneration != m_connectionGeneration.load(std::memory_order_acquire)) return;
+          EmitLog("Windows GATT session status changed; status=" +
+            std::to_string(static_cast<int32_t>(args.Status())) +
+            " error=" + std::to_string(static_cast<int32_t>(args.Error())));
+        });
+      m_hasSessionStatusHandler = true;
+    }
+
     Bluetooth::BluetoothLEPreferredConnectionParametersRequest preferredConnectionRequest{nullptr};
     if (Metadata::ApiInformation::IsMethodPresent(
           L"Windows.Devices.Bluetooth.BluetoothLEDevice",
@@ -231,15 +265,38 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       try {
         preferredConnectionRequest = device.RequestPreferredConnectionParameters(
           Bluetooth::BluetoothLEPreferredConnectionParameters::Balanced());
-        auto parameters = device.GetConnectionParameters();
         EmitLog("Windows BLE balanced connection requested; status=" +
           std::to_string(static_cast<int32_t>(preferredConnectionRequest.Status())) +
-          " interval=" + std::to_string(parameters.ConnectionInterval()) +
-          " latency=" + std::to_string(parameters.ConnectionLatency()) +
-          " timeout=" + std::to_string(parameters.LinkTimeout()));
+          " " + ConnectionParametersDescription(device));
       } catch (winrt::hresult_error const &error) {
         EmitLog("Windows BLE balanced connection request unavailable: " + winrt::to_string(error.message()));
       }
+    }
+
+    if (Metadata::ApiInformation::IsEventPresent(
+          L"Windows.Devices.Bluetooth.BluetoothLEDevice", L"ConnectionParametersChanged")) {
+      m_connectionParametersToken = device.ConnectionParametersChanged(
+        [this, connectionGeneration](Bluetooth::BluetoothLEDevice const &changedDevice, auto const &) {
+          if (connectionGeneration != m_connectionGeneration.load(std::memory_order_acquire)) return;
+          try {
+            EmitLog("Windows BLE parameters changed; " + ConnectionParametersDescription(changedDevice));
+          } catch (...) {}
+        });
+      m_hasConnectionParametersHandler = true;
+    }
+    if (Metadata::ApiInformation::IsEventPresent(
+          L"Windows.Devices.Bluetooth.BluetoothLEDevice", L"ConnectionPhyChanged")) {
+      m_connectionPhyToken = device.ConnectionPhyChanged(
+        [this, connectionGeneration](Bluetooth::BluetoothLEDevice const &changedDevice, auto const &) {
+          if (connectionGeneration != m_connectionGeneration.load(std::memory_order_acquire)) return;
+          try {
+            EmitLog("Windows BLE PHY changed; " + ConnectionPhyDescription(changedDevice));
+          } catch (...) {}
+        });
+      m_hasConnectionPhyHandler = true;
+      try {
+        EmitLog("Windows BLE PHY current; " + ConnectionPhyDescription(device));
+      } catch (...) {}
     }
 
     // Windows has already restored the FFF2 CCCD by this point, which means
@@ -345,10 +402,19 @@ void EdgezReactNativeSdk::Close(bool emitDisconnected) noexcept {
   m_notifications.clear();
   m_rx = nullptr;
   m_ota = nullptr;
+  if (m_device && m_hasConnectionParametersHandler) m_device.ConnectionParametersChanged(m_connectionParametersToken);
+  m_hasConnectionParametersHandler = false;
+  m_connectionParametersToken = {};
+  if (m_device && m_hasConnectionPhyHandler) m_device.ConnectionPhyChanged(m_connectionPhyToken);
+  m_hasConnectionPhyHandler = false;
+  m_connectionPhyToken = {};
   try {
     if (m_preferredConnectionRequest) m_preferredConnectionRequest.Close();
     m_preferredConnectionRequest = nullptr;
     if (m_session) {
+      if (m_hasSessionStatusHandler) m_session.SessionStatusChanged(m_sessionStatusToken);
+      m_hasSessionStatusHandler = false;
+      m_sessionStatusToken = {};
       m_session.MaintainConnection(false);
       m_session.Close();
     }
@@ -357,6 +423,8 @@ void EdgezReactNativeSdk::Close(bool emitDisconnected) noexcept {
     m_preferredConnectionRequest = nullptr;
     m_session = nullptr;
   }
+  m_hasSessionStatusHandler = false;
+  m_sessionStatusToken = {};
   if (m_service) m_service.Close();
   m_service = nullptr;
   if (m_device && m_hasConnectionStatusHandler) m_device.ConnectionStatusChanged(m_connectionStatusToken);
@@ -368,10 +436,15 @@ void EdgezReactNativeSdk::Close(bool emitDisconnected) noexcept {
   if (emitDisconnected) Emit({{"type", "connection"}, {"connection", "none"}});
 }
 
-void EdgezReactNativeSdk::InitializeMesh(React::JSValueObject &&arguments, React::ReactPromise<void> &&promise) noexcept { QueuePacket(arguments, promise); }
-void EdgezReactNativeSdk::SendPacket(React::JSValueObject &&arguments, React::ReactPromise<void> &&promise) noexcept { QueuePacket(arguments, promise); }
+void EdgezReactNativeSdk::InitializeMesh(React::JSValueObject &&arguments, React::ReactPromise<void> &&promise) noexcept {
+  QueuePacket(arguments, promise, true);
+}
+void EdgezReactNativeSdk::SendPacket(React::JSValueObject &&arguments, React::ReactPromise<void> &&promise) noexcept {
+  QueuePacket(arguments, promise, false);
+}
 
-void EdgezReactNativeSdk::QueuePacket(React::JSValueObject const &arguments, React::ReactPromise<void> const &promise) noexcept {
+void EdgezReactNativeSdk::QueuePacket(React::JSValueObject const &arguments, React::ReactPromise<void> const &promise,
+                                     bool optimizeConnectionAfterWrite) noexcept {
   auto found = arguments.find("packet");
   if (found == arguments.end()) { promise.Reject("Missing EdgeZ packet"); return; }
   auto const &packet = found->second.AsArray();
@@ -381,10 +454,11 @@ void EdgezReactNativeSdk::QueuePacket(React::JSValueObject const &arguments, Rea
   std::vector<uint8_t> frame{'E', 'Z', static_cast<uint8_t>(packet.size() & 0xff), static_cast<uint8_t>((packet.size() >> 8) & 0xff)};
   frame.reserve(packet.size() + 4);
   for (auto const &value : packet) frame.push_back(static_cast<uint8_t>(value.AsDouble()));
-  WriteFrameAsync(std::move(frame), promise);
+  WriteFrameAsync(std::move(frame), promise, optimizeConnectionAfterWrite);
 }
 
-winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t> frame, React::ReactPromise<void> promise) noexcept {
+winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t> frame, React::ReactPromise<void> promise,
+                                                            bool optimizeConnectionAfterWrite) noexcept {
   auto writeGeneration = m_connectionGeneration.load(std::memory_order_acquire);
   auto rx = m_rx;
   auto service = m_service;
@@ -439,6 +513,22 @@ winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t>
       }
     }
     EmitLog("BLE control write completed; bytes=" + std::to_string(frame.size()));
+    if (optimizeConnectionAfterWrite &&
+        writeGeneration == m_connectionGeneration.load(std::memory_order_acquire) &&
+        Metadata::ApiInformation::IsMethodPresent(
+          L"Windows.Devices.Bluetooth.BluetoothLEDevice", L"RequestPreferredConnectionParameters")) {
+      try {
+        auto powerRequest = m_device.RequestPreferredConnectionParameters(
+          Bluetooth::BluetoothLEPreferredConnectionParameters::PowerOptimized());
+        if (m_preferredConnectionRequest) m_preferredConnectionRequest.Close();
+        m_preferredConnectionRequest = powerRequest;
+        EmitLog("Windows BLE power-optimized connection requested after mesh initialization; status=" +
+          std::to_string(static_cast<int32_t>(powerRequest.Status())) +
+          " " + ConnectionParametersDescription(m_device));
+      } catch (winrt::hresult_error const &error) {
+        EmitLog("Windows BLE power-optimized connection request unavailable: " + winrt::to_string(error.message()));
+      }
+    }
     promise.Resolve();
   } catch (winrt::hresult_error const &error) {
     EmitLog("BLE control write failed: " + winrt::to_string(error.message()));
