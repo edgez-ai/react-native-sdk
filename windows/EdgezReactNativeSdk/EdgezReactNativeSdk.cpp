@@ -156,7 +156,6 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     m_device = device;
 
     pairing = device.DeviceInformation().Pairing();
-    auto requiredPairingProtection = Enumeration::DevicePairingProtectionLevel::EncryptionAndAuthentication;
     if (!pairing.IsPaired()) {
       // Preserve the original SDK behavior: do not initiate custom pairing.
       // FFF1 requests authenticated protection below, so the first control
@@ -167,16 +166,11 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       auto protection = pairing.ProtectionLevel();
       EmitLog("Windows reports an existing BLE pairing association; protection=" +
         std::to_string(static_cast<int32_t>(protection)));
-      if (protection != requiredPairingProtection) {
-        EmitLog("Existing Windows BLE association is not authenticated; resetting it for factory-PIN pairing");
-        if (allowAssociationReset) {
-          ResetAssociationAndReconnectAsync(address, promise, pairing);
-        } else {
-          promise.Reject("Windows BLE pairing is not authenticated; forget the device and pair again with its factory PIN");
-          Close(true);
-        }
-        co_return;
-      }
+      // DeviceInformationPairing::ProtectionLevel describes the Windows
+      // association and can report Encryption even for a bond whose BLE keys
+      // satisfy the authenticated FFF1 characteristic. Do not destroy a
+      // working bond based on this metadata. The protected FFF1 write is the
+      // authoritative security check and reuses the stored keys silently.
     }
 
     // Enumerating the complete service table is more compatible with Windows
@@ -418,7 +412,13 @@ winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t>
       auto end = std::min(frame.size(), offset + maximum);
       std::vector<uint8_t> chunk(frame.begin() + offset, frame.begin() + end);
       bool written = false;
-      for (int attempt = 1; attempt <= 4; ++attempt) {
+      // The first protected FFF1 write starts Windows' native PIN ceremony.
+      // WriteValueWithResultAsync may return Unreachable immediately while the
+      // dialog remains open and the firmware is still completing encryption.
+      // Keep the original frame alive for that authentication window instead
+      // of requiring JavaScript to manufacture a second INIT_HALOW request.
+      auto maximumAttempts = offset == 0 ? 40 : 4;
+      for (int attempt = 1; attempt <= maximumAttempts; ++attempt) {
         auto result = co_await rx.WriteValueWithResultAsync(Buffer(chunk), Gatt::GattWriteOption::WriteWithResponse);
         if (writeGeneration != m_connectionGeneration.load(std::memory_order_acquire)) {
           promise.Reject("BLE disconnected during control write");
@@ -434,10 +434,12 @@ winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t>
         EmitLog("BLE control write failed; status=" + std::to_string(static_cast<int32_t>(result.Status())) +
           " protocol_error=" + std::to_string(protocolErrorCode) +
           " offset=" + std::to_string(offset) + " attempt=" + std::to_string(attempt));
-        auto securityStillSettling = result.Status() == Gatt::GattCommunicationStatus::ProtocolError &&
-          (protocolErrorCode == 0x05 || protocolErrorCode == 0x0c || protocolErrorCode == 0x0f);
-        if (!securityStillSettling || attempt == 4) break;
-        co_await winrt::resume_after(std::chrono::milliseconds(500));
+        auto authenticationStillSettling =
+          result.Status() == Gatt::GattCommunicationStatus::Unreachable ||
+          (result.Status() == Gatt::GattCommunicationStatus::ProtocolError &&
+            (protocolErrorCode == 0x05 || protocolErrorCode == 0x0c || protocolErrorCode == 0x0f));
+        if (!authenticationStillSettling || attempt == maximumAttempts) break;
+        co_await winrt::resume_after(std::chrono::milliseconds(offset == 0 ? 750 : 500));
         if (writeGeneration != m_connectionGeneration.load(std::memory_order_acquire)) {
           promise.Reject("BLE disconnected while waiting to retry the control write");
           co_return;
