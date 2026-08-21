@@ -271,12 +271,45 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       }
       if (uuid == ShortUuid(0xfff5)) ota = characteristic;
       if (uuid == ShortUuid(0xfff2) || uuid == ShortUuid(0xfff4) || uuid == ShortUuid(0xfff6) || uuid == ShortUuid(0xfff8)) {
+        auto authenticationGate = uuid == ShortUuid(0xfff2);
+        if (authenticationGate) {
+          // FFF2 is the first CCCD configured after discovery. Requesting
+          // authenticated protection here makes Windows restore or create the
+          // bond before the firmware's bond-restore grace timer starts its own
+          // SMP exchange. A valid stored bond is reused without a dialog.
+          characteristic.ProtectionLevel(Gatt::GattProtectionLevel::EncryptionAndAuthenticationRequired);
+        }
         characteristic.ValueChanged({this, &EdgezReactNativeSdk::HandleValue});
-        auto status = co_await characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
-          Gatt::GattClientCharacteristicConfigurationDescriptorValue::Notify);
-        if (!isCurrentConnection()) { promise.Reject("BLE disconnected during notification setup"); co_return; }
-        if (status == Gatt::GattCommunicationStatus::Success) notifications.push_back(characteristic);
-        else EmitLog("BLE notification subscription failed; status=" + std::to_string(static_cast<int32_t>(status)));
+        auto maximumSubscriptionAttempts = authenticationGate ? 40 : 1;
+        bool subscribed = false;
+        for (int attempt = 1; attempt <= maximumSubscriptionAttempts; ++attempt) {
+          auto status = co_await characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
+            Gatt::GattClientCharacteristicConfigurationDescriptorValue::Notify);
+          if (!isCurrentConnection() || device.ConnectionStatus() == Bluetooth::BluetoothConnectionStatus::Disconnected) {
+            promise.Reject("BLE disconnected during notification setup");
+            co_return;
+          }
+          if (status == Gatt::GattCommunicationStatus::Success) {
+            notifications.push_back(characteristic);
+            subscribed = true;
+            if (authenticationGate) EmitLog("BLE authenticated notification channel ready");
+            break;
+          }
+          EmitLog("BLE notification subscription failed; status=" +
+            std::to_string(static_cast<int32_t>(status)) +
+            " attempt=" + std::to_string(attempt));
+          auto authenticationStillSettling = authenticationGate &&
+            (status == Gatt::GattCommunicationStatus::Unreachable ||
+             status == Gatt::GattCommunicationStatus::ProtocolError);
+          if (!authenticationStillSettling || attempt == maximumSubscriptionAttempts) break;
+          co_await winrt::resume_after(std::chrono::milliseconds(750));
+          if (!isCurrentConnection()) { promise.Reject("BLE disconnected while waiting for authentication"); co_return; }
+        }
+        if (authenticationGate && !subscribed) {
+          promise.Reject("Windows could not establish authenticated BLE access");
+          Close(true);
+          co_return;
+        }
       }
     }
     if (!rx) {
