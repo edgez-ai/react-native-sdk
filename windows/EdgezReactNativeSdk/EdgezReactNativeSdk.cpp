@@ -130,21 +130,26 @@ void EdgezReactNativeSdk::ConnectBle(React::JSValueObject &&arguments, React::Re
   try {
     auto address = std::stoull(found->second.AsString(), nullptr, 16);
     if (m_watcher && m_watcher.Status() == Advertisement::BluetoothLEAdvertisementWatcherStatus::Started) m_watcher.Stop();
-    ConnectAsync(address, promise);
+    ConnectAsync(address, promise, true);
   } catch (...) {
     EmitLog("BLE connection rejected: invalid scanned device ID");
     promise.Reject("Invalid BLE device ID; scan again before connecting");
   }
 }
 
-winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(uint64_t address, React::ReactPromise<void> promise) noexcept {
+winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
+    uint64_t address,
+    React::ReactPromise<void> promise,
+    bool allowBondReset) noexcept {
+  Enumeration::DeviceInformationPairing pairing{nullptr};
+  bool usedExistingBond = false;
   try {
     Close(false);
     EmitLog("Connecting BLE " + AddressString(address));
     m_device = co_await Bluetooth::BluetoothLEDevice::FromBluetoothAddressAsync(address);
     if (!m_device) { promise.Reject("BLE device was not found; scan first"); co_return; }
 
-    auto pairing = m_device.DeviceInformation().Pairing();
+    pairing = m_device.DeviceInformation().Pairing();
     if (!pairing.IsPaired()) {
       if (!pairing.CanPair()) {
         promise.Reject("Windows reports that this BLE device cannot be paired");
@@ -172,6 +177,7 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(uint64_t address, React
       }
       EmitLog("Windows BLE pairing completed");
     } else {
+      usedExistingBond = true;
       EmitLog("Using existing Windows BLE bond");
     }
 
@@ -217,6 +223,38 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(uint64_t address, React
     promise.Resolve();
   } catch (winrt::hresult_error const &error) {
     EmitLog("BLE connection failed: " + winrt::to_string(error.message()));
+    if (allowBondReset && usedExistingBond && pairing) {
+      EmitLog("Existing Windows BLE bond appears stale; resetting it once");
+      ResetBondAndReconnectAsync(address, promise, pairing);
+      co_return;
+    }
+    promise.Reject(error.message().c_str());
+    Close(true);
+  }
+}
+
+winrt::fire_and_forget EdgezReactNativeSdk::ResetBondAndReconnectAsync(
+    uint64_t address,
+    React::ReactPromise<void> promise,
+    Enumeration::DeviceInformationPairing pairing) noexcept {
+  try {
+    Close(false);
+    auto result = co_await pairing.UnpairAsync();
+    auto status = result.Status();
+    EmitLog("Windows BLE unpair completed; status=" + std::to_string(static_cast<int32_t>(status)));
+    if (status != Enumeration::DeviceUnpairingResultStatus::Unpaired &&
+        status != Enumeration::DeviceUnpairingResultStatus::AlreadyUnpaired) {
+      promise.Reject(("Could not reset stale Windows BLE bond; status=" +
+                      std::to_string(static_cast<int32_t>(status))).c_str());
+      Close(true);
+      co_return;
+    }
+
+    co_await winrt::resume_after(std::chrono::milliseconds(500));
+    EmitLog("Retrying BLE connection with a fresh Windows bond");
+    ConnectAsync(address, promise, false);
+  } catch (winrt::hresult_error const &error) {
+    EmitLog("Windows BLE bond reset failed: " + winrt::to_string(error.message()));
     promise.Reject(error.message().c_str());
     Close(true);
   }
