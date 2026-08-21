@@ -6,7 +6,7 @@
     "start": "react-native start",
     "windows:init": "react-native init-windows --overwrite --no-telemetry && node scripts/configure-windows.mjs",
     "windows": "react-native run-windows --no-telemetry",
-    "build:windows": "react-native run-windows --release --no-launch --no-packager --no-telemetry",
+    "build:windows": "react-native run-windows --release --arch x64 --no-launch --no-packager --no-deploy --no-telemetry",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

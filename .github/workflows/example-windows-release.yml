@@ -1,0 +1,94 @@
+name: Build Windows example release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: react-native-example-windows-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build x64 release artifact
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Enable Git long paths
+        shell: pwsh
+        run: git config --global core.longpaths true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.11.0"
+          cache: npm
+          cache-dependency-path: desktop-example/windows-app/package-lock.json
+
+      - name: Install Windows example dependencies
+        working-directory: desktop-example/windows-app
+        run: npm ci
+
+      - name: Generate React Native Windows project
+        working-directory: desktop-example/windows-app
+        run: npm run windows:init
+
+      - name: Type-check Windows example
+        working-directory: desktop-example/windows-app
+        run: npm run typecheck
+
+      - name: Build Windows x64 release
+        working-directory: desktop-example/windows-app
+        run: npm run build:windows
+
+      - name: Collect Windows release package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $windowsRoot = Join-Path $env:GITHUB_WORKSPACE 'desktop-example/windows-app/windows'
+          $artifactRoot = Join-Path $env:GITHUB_WORKSPACE 'release-artifacts'
+          New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
+
+          $package = Get-ChildItem -Path $windowsRoot -Directory -Filter AppPackages -Recurse |
+            ForEach-Object { Get-ChildItem -Path $_.FullName -Directory } |
+            Where-Object { $_.Name -match '_x64_(Release_)?Test$' } |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+
+          if (-not $package) {
+            Write-Host 'AppPackages directories found:'
+            Get-ChildItem -Path $windowsRoot -Directory -Filter AppPackages -Recurse |
+              ForEach-Object { Get-ChildItem -Path $_.FullName -Directory } |
+              ForEach-Object { Write-Host $_.FullName }
+            throw 'Could not find the generated x64 Windows release package.'
+          }
+
+          $archive = Join-Path $artifactRoot 'edgez-react-native-example-windows-x64.zip'
+          Compress-Archive -Path (Join-Path $package.FullName '*') -DestinationPath $archive -Force
+          Write-Host "Packaged $($package.FullName) as $archive"
+
+      - name: Upload Windows release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: react-native-example-windows-release-${{ github.run_number }}
+          path: release-artifacts/edgez-react-native-example-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Windows package to GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-artifacts/edgez-react-native-example-windows-x64.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true

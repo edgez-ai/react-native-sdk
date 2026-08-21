@@ -1,0 +1,152 @@
+name: Build Android example release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: react-native-example-android-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build release artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.4"
+          cache: npm
+          cache-dependency-path: example/package-lock.json
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Install example dependencies
+        working-directory: example
+        run: npm ci
+
+      - name: Generate Expo Android project
+        working-directory: example
+        run: npx expo prebuild --platform android --clean --no-install
+
+      - name: Configure unsigned release build
+        working-directory: example
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+
+          const path = 'android/app/build.gradle';
+          const source = fs.readFileSync(path, 'utf8');
+          const buildTypesStart = source.indexOf('buildTypes {');
+          const releaseStart = source.indexOf('release {', buildTypesStart);
+          const signingLine = 'signingConfig signingConfigs.debug';
+          const signingStart = source.indexOf(signingLine, releaseStart);
+
+          if (buildTypesStart < 0 || releaseStart < 0 || signingStart < 0) {
+            throw new Error('Could not find Expo release signing configuration');
+          }
+
+          const output =
+            source.slice(0, signingStart) +
+            '// Release packages are signed explicitly by the release workflow.' +
+            source.slice(signingStart + signingLine.length);
+          fs.writeFileSync(path, output);
+          NODE
+
+      - name: Build unsigned release packages
+        working-directory: example/android
+        run: ./gradlew --no-daemon assembleRelease bundleRelease
+
+      - name: Collect unsigned release packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          cp example/android/app/build/outputs/apk/release/app-release-unsigned.apk \
+            release-artifacts/app-release-unsigned.apk
+          cp example/android/app/build/outputs/bundle/release/app-release.aab \
+            release-artifacts/app-release-unsigned.aab
+
+      - name: Configure Android release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${ANDROID_KEYSTORE_BASE64:?Missing ANDROID_KEYSTORE_BASE64 secret}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?Missing ANDROID_KEYSTORE_PASSWORD secret}"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > release-keystore.jks
+
+      - name: Sign and verify release packages
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: edgez-android-release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apksigner_path="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          : "${apksigner_path:?Could not find apksigner in ANDROID_SDK_ROOT}"
+
+          "$apksigner_path" sign \
+            --ks release-keystore.jks \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --key-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --out release-artifacts/app-release-signed.apk \
+            release-artifacts/app-release-unsigned.apk
+          "$apksigner_path" verify --verbose \
+            release-artifacts/app-release-signed.apk
+
+          jarsigner \
+            -keystore release-keystore.jks \
+            -storepass:env ANDROID_KEYSTORE_PASSWORD \
+            -keypass:env ANDROID_KEYSTORE_PASSWORD \
+            -signedjar release-artifacts/app-release-signed.aab \
+            release-artifacts/app-release-unsigned.aab \
+            "$KEY_ALIAS"
+          jarsigner -verify -verbose -certs \
+            release-artifacts/app-release-signed.aab
+
+      - name: Remove temporary signing material
+        if: always()
+        shell: bash
+        run: rm -f release-keystore.jks release-artifacts/app-release-unsigned.aab
+
+      - name: Upload Android release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: react-native-example-android-release-${{ github.run_number }}
+          path: release-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Android packages to GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-artifacts/app-release-unsigned.apk
+            release-artifacts/app-release-signed.apk
+            release-artifacts/app-release-signed.aab
+          fail_on_unmatched_files: true
+          generate_release_notes: true
