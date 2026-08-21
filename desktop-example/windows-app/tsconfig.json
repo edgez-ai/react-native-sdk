@@ -2,7 +2,8 @@
   "extends": "@react-native/typescript-config",
   "compilerOptions": {
     "noEmit": true,
-    "strict": true
+    "strict": true,
+    "types": ["react"]
   },
   "include": ["App.tsx", "../../example/src/**/*.ts", "../../example/src/**/*.tsx"],
   "exclude": ["node_modules", "windows"]
