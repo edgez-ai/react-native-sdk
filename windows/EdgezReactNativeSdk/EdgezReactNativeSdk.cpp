@@ -64,6 +64,32 @@ static std::string AddressString(uint64_t address) {
   return stream.str();
 }
 
+static std::string NormalizeBluetoothAddress(std::string const &address) {
+  std::string normalized;
+  normalized.reserve(12);
+  for (auto value : address) {
+    auto byte = static_cast<unsigned char>(value);
+    if (std::isxdigit(byte)) normalized.push_back(static_cast<char>(std::toupper(byte)));
+  }
+  return normalized;
+}
+
+static Windows::Foundation::IAsyncOperation<Enumeration::DeviceInformation>
+FindBleAssociationEndpointAsync(uint64_t address) {
+  auto properties = winrt::single_threaded_vector<winrt::hstring>({L"System.Devices.Aep.DeviceAddress"});
+  auto devices = co_await Enumeration::DeviceInformation::FindAllAsync(
+    L"System.Devices.Aep.ProtocolId:=\"{bb7bb05e-5972-42b5-94fc-76eaa7084d49}\"",
+    properties,
+    Enumeration::DeviceInformationKind::AssociationEndpoint);
+  auto expectedAddress = AddressString(address);
+  for (auto const &candidate : devices) {
+    auto value = candidate.Properties().TryLookup(L"System.Devices.Aep.DeviceAddress");
+    auto candidateAddress = value ? winrt::unbox_value_or<winrt::hstring>(value, L"") : L"";
+    if (NormalizeBluetoothAddress(winrt::to_string(candidateAddress)) == expectedAddress) co_return candidate;
+  }
+  co_return Enumeration::DeviceInformation{nullptr};
+}
+
 static Streams::IBuffer Buffer(std::vector<uint8_t> const &bytes) {
   Streams::DataWriter writer;
   writer.WriteBytes(bytes);
@@ -155,12 +181,38 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     if (!device) { promise.Reject("BLE device was not found; scan first"); co_return; }
     m_device = device;
 
-    pairing = device.DeviceInformation().Pairing();
+    // Pairing must use the Bluetooth AssociationEndpoint (AEP). The
+    // DeviceInformation attached to BluetoothLEDevice is a device-interface
+    // object; PairAsync on that object can fail with status 19 and never show
+    // the Windows system pairing dialog.
+    auto pairingEndpoint = co_await FindBleAssociationEndpointAsync(address);
+    if (!isCurrentConnection()) { promise.Reject("BLE connection attempt was superseded"); co_return; }
+    pairing = pairingEndpoint ? pairingEndpoint.Pairing() : device.DeviceInformation().Pairing();
     if (!pairing.IsPaired()) {
-      // Preserve the original SDK behavior: do not initiate custom pairing.
-      // FFF1 requests authenticated protection below, so the first control
-      // write asks Windows to display its native factory-PIN dialog.
-      EmitLog("No Windows BLE pairing association; authenticated FFF1 access will request the native PIN dialog");
+      if (!pairingEndpoint) {
+        EmitLog("Windows BLE association endpoint was not found; falling back to authenticated FFF1 access");
+      } else if (!pairing.CanPair()) {
+        promise.Reject("Windows reports that this BLE device is not ready to pair");
+        Close(true);
+        co_return;
+      } else {
+        EmitLog("Requesting the Windows native BLE pairing dialog");
+        auto pairingResult = co_await pairing.PairAsync(
+          Enumeration::DevicePairingProtectionLevel::EncryptionAndAuthentication);
+        if (!isCurrentConnection()) { promise.Reject("BLE disconnected during pairing"); co_return; }
+        auto status = pairingResult.Status();
+        EmitLog("Windows BLE pairing completed; status=" +
+          std::to_string(static_cast<int32_t>(status)));
+        if (status != Enumeration::DevicePairingResultStatus::Paired &&
+            status != Enumeration::DevicePairingResultStatus::AlreadyPaired) {
+          promise.Reject(("Windows BLE pairing failed; status=" +
+            std::to_string(static_cast<int32_t>(status))).c_str());
+          Close(true);
+          co_return;
+        }
+        co_await winrt::resume_after(std::chrono::milliseconds(750));
+        if (!isCurrentConnection()) { promise.Reject("BLE disconnected after pairing"); co_return; }
+      }
     } else {
       usedExistingAssociation = true;
       auto protection = pairing.ProtectionLevel();
@@ -271,45 +323,12 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       }
       if (uuid == ShortUuid(0xfff5)) ota = characteristic;
       if (uuid == ShortUuid(0xfff2) || uuid == ShortUuid(0xfff4) || uuid == ShortUuid(0xfff6) || uuid == ShortUuid(0xfff8)) {
-        auto authenticationGate = uuid == ShortUuid(0xfff2);
-        if (authenticationGate) {
-          // FFF2 is the first CCCD configured after discovery. Requesting
-          // authenticated protection here makes Windows restore or create the
-          // bond before the firmware's bond-restore grace timer starts its own
-          // SMP exchange. A valid stored bond is reused without a dialog.
-          characteristic.ProtectionLevel(Gatt::GattProtectionLevel::EncryptionAndAuthenticationRequired);
-        }
         characteristic.ValueChanged({this, &EdgezReactNativeSdk::HandleValue});
-        auto maximumSubscriptionAttempts = authenticationGate ? 40 : 1;
-        bool subscribed = false;
-        for (int attempt = 1; attempt <= maximumSubscriptionAttempts; ++attempt) {
-          auto status = co_await characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
-            Gatt::GattClientCharacteristicConfigurationDescriptorValue::Notify);
-          if (!isCurrentConnection() || device.ConnectionStatus() == Bluetooth::BluetoothConnectionStatus::Disconnected) {
-            promise.Reject("BLE disconnected during notification setup");
-            co_return;
-          }
-          if (status == Gatt::GattCommunicationStatus::Success) {
-            notifications.push_back(characteristic);
-            subscribed = true;
-            if (authenticationGate) EmitLog("BLE authenticated notification channel ready");
-            break;
-          }
-          EmitLog("BLE notification subscription failed; status=" +
-            std::to_string(static_cast<int32_t>(status)) +
-            " attempt=" + std::to_string(attempt));
-          auto authenticationStillSettling = authenticationGate &&
-            (status == Gatt::GattCommunicationStatus::Unreachable ||
-             status == Gatt::GattCommunicationStatus::ProtocolError);
-          if (!authenticationStillSettling || attempt == maximumSubscriptionAttempts) break;
-          co_await winrt::resume_after(std::chrono::milliseconds(750));
-          if (!isCurrentConnection()) { promise.Reject("BLE disconnected while waiting for authentication"); co_return; }
-        }
-        if (authenticationGate && !subscribed) {
-          promise.Reject("Windows could not establish authenticated BLE access");
-          Close(true);
-          co_return;
-        }
+        auto status = co_await characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
+          Gatt::GattClientCharacteristicConfigurationDescriptorValue::Notify);
+        if (!isCurrentConnection()) { promise.Reject("BLE disconnected during notification setup"); co_return; }
+        if (status == Gatt::GattCommunicationStatus::Success) notifications.push_back(characteristic);
+        else EmitLog("BLE notification subscription failed; status=" + std::to_string(static_cast<int32_t>(status)));
       }
     }
     if (!rx) {
