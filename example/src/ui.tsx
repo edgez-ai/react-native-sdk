@@ -1,5 +1,5 @@
 import React from 'react';
-import {ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View} from 'react-native';
 
 export function Card({title, action, children}: React.PropsWithChildren<{title: string; action?: React.ReactNode}>) {
   return <View style={styles.card}>
@@ -26,7 +26,23 @@ export function Button({label, onPress, secondary, disabled}: {label: string; on
 }
 
 export function Field({label, value, onChangeText, secureTextEntry, keyboardType}: {label: string; value: string; onChangeText: (value: string) => void; secureTextEntry?: boolean; keyboardType?: 'default'|'numeric'|'decimal-pad'}) {
-  return <View style={styles.field}><Text style={styles.label}>{label}</Text><TextInput style={styles.input} value={value} onChangeText={onChangeText} secureTextEntry={secureTextEntry} keyboardType={keyboardType} placeholderTextColor="#738095" /></View>;
+  const [focused, setFocused] = React.useState(false);
+  // react-native-macos 0.81's secure field crashes in AppKit when focus moves
+  // to another TextInput. Keep native secure fields on mobile; on macOS use a
+  // regular field that is masked whenever it is not being edited.
+  const usesMacMask = !!secureTextEntry && String(Platform.OS) === 'macos';
+  const displayValue = usesMacMask && !focused ? '•'.repeat([...value].length) : value;
+
+  return <View style={styles.field}><Text style={styles.label}>{label}</Text><TextInput
+    style={styles.input}
+    value={displayValue}
+    onChangeText={onChangeText}
+    onFocus={() => setFocused(true)}
+    onBlur={() => setFocused(false)}
+    secureTextEntry={secureTextEntry && !usesMacMask}
+    keyboardType={keyboardType}
+    placeholderTextColor="#738095"
+  /></View>;
 }
 
 export function ToggleRow({label, detail, value, onValueChange, disabled}: {label: string; detail?: string; value: boolean; onValueChange: (value: boolean) => void; disabled?: boolean}) {
