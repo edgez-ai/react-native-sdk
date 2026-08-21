@@ -50,38 +50,77 @@ jobs:
         working-directory: desktop-example/windows-app
         run: npm run build:windows
 
-      - name: Collect Windows release package
+      - name: Collect portable Windows release
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
           $windowsRoot = Join-Path $env:GITHUB_WORKSPACE 'desktop-example/windows-app/windows'
           $artifactRoot = Join-Path $env:GITHUB_WORKSPACE 'release-artifacts'
+          $portableRoot = Join-Path $artifactRoot 'edgez-react-native-example-windows-x64'
           New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
+          New-Item -ItemType Directory -Path $portableRoot -Force | Out-Null
 
-          $package = Get-ChildItem -Path $windowsRoot -Directory -Filter AppPackages -Recurse |
-            ForEach-Object { Get-ChildItem -Path $_.FullName -Directory } |
-            Where-Object { $_.Name -match '_x64_(Release_)?Test$' } |
+          $executable = Get-ChildItem -Path $windowsRoot -File -Filter 'EdgezWindowsExample.exe' -Recurse |
+            Where-Object {
+              $_.FullName -match '[\\/]x64[\\/]Release[\\/]' -and
+              $_.FullName -notmatch '[\\/](AppPackages|obj)[\\/]'
+            } |
+            Sort-Object { $_.FullName.Length } |
+            Select-Object -First 1
+
+          if (-not $executable) {
+            Write-Host 'Release executables found:'
+            Get-ChildItem -Path $windowsRoot -File -Filter '*.exe' -Recurse |
+              ForEach-Object { Write-Host $_.FullName }
+            throw 'Could not find the generated EdgezWindowsExample x64 Release executable.'
+          }
+
+          Copy-Item -Path (Join-Path $executable.Directory.FullName '*') -Destination $portableRoot -Recurse -Force
+
+          $bundle = Get-ChildItem -Path $windowsRoot -File -Filter 'index.windows.bundle' -Recurse |
+            Where-Object { $_.Directory.Name -eq 'Bundle' } |
             Sort-Object LastWriteTimeUtc -Descending |
             Select-Object -First 1
 
-          if (-not $package) {
-            Write-Host 'AppPackages directories found:'
-            Get-ChildItem -Path $windowsRoot -Directory -Filter AppPackages -Recurse |
-              ForEach-Object { Get-ChildItem -Path $_.FullName -Directory } |
-              ForEach-Object { Write-Host $_.FullName }
-            throw 'Could not find the generated x64 Windows release package.'
+          if (-not $bundle) {
+            throw 'The Release build did not produce Bundle/index.windows.bundle.'
+          }
+          $bundleDestination = Join-Path $portableRoot 'Bundle'
+          New-Item -ItemType Directory -Path $bundleDestination -Force | Out-Null
+          Copy-Item -Path (Join-Path $bundle.Directory.FullName '*') -Destination $bundleDestination -Recurse -Force
+
+          @'
+          RUNNING THE EDGEZ WINDOWS EXAMPLE
+
+          This is a portable, self-contained x64 build. It does not use an installer
+          or MSIX publisher certificate.
+
+          1. Extract this entire ZIP file.
+          2. Keep the DLL and Bundle files beside EdgezWindowsExample.exe.
+          3. Double-click EdgezWindowsExample.exe.
+
+          Windows SmartScreen may warn because this development executable is not
+          signed by a public code-signing authority. Only run archives downloaded
+          from the official edgez-ai/react-native-sdk GitHub release.
+          '@ | Set-Content -LiteralPath (Join-Path $portableRoot 'README.txt') -Encoding utf8
+
+          if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'EdgezWindowsExample.exe'))) {
+            throw 'The portable release staging directory is missing EdgezWindowsExample.exe.'
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $portableRoot 'Bundle/index.windows.bundle'))) {
+            throw 'The portable release staging directory is missing the JavaScript bundle.'
           }
 
-          $archive = Join-Path $artifactRoot 'edgez-react-native-example-windows-x64.zip'
-          Compress-Archive -Path (Join-Path $package.FullName '*') -DestinationPath $archive -Force
-          Write-Host "Packaged $($package.FullName) as $archive"
+          $archive = Join-Path $artifactRoot 'edgez-react-native-example-windows-x64-portable.zip'
+          Compress-Archive -Path (Join-Path $portableRoot '*') -DestinationPath $archive -Force
+          Write-Host "Packaged $($executable.Directory.FullName) as $archive"
 
       - name: Upload Windows release artifact
         uses: actions/upload-artifact@v4
         with:
           name: react-native-example-windows-release-${{ github.run_number }}
-          path: release-artifacts/edgez-react-native-example-windows-x64.zip
+          path: release-artifacts/edgez-react-native-example-windows-x64-portable.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -89,6 +128,6 @@ jobs:
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          files: release-artifacts/edgez-react-native-example-windows-x64.zip
+          files: release-artifacts/edgez-react-native-example-windows-x64-portable.zip
           fail_on_unmatched_files: true
           generate_release_notes: true

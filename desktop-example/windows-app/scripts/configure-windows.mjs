@@ -7,6 +7,19 @@ const packageDirectory = entries.find(entry => entry.isDirectory() && entry.name
 
 if (!packageDirectory) throw new Error('Could not find the generated Windows package project');
 
+const appName = packageDirectory.name.replace(/\.Package$/, '');
+const appProjectPath = path.join(windowsDirectory, appName, `${appName}.vcxproj`);
+const appProject = await readFile(appProjectPath, 'utf8');
+
+if (!appProject.includes('<WindowsPackageType>None</WindowsPackageType>')) {
+  const updated = appProject.replace(
+    '<AppxPackage>false</AppxPackage>',
+    '<AppxPackage>false</AppxPackage>\n    <WindowsPackageType>None</WindowsPackageType>\n    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>',
+  );
+  if (updated === appProject) throw new Error(`Could not configure unpackaged output in ${appProjectPath}`);
+  await writeFile(appProjectPath, updated);
+}
+
 const manifestPath = path.join(windowsDirectory, packageDirectory.name, 'Package.appxmanifest');
 const manifest = await readFile(manifestPath, 'utf8');
 
@@ -30,5 +43,6 @@ await writeFile(
 );
 
 console.log(`Configured Bluetooth capability in ${manifestPath}`);
+console.log(`Configured self-contained portable output in ${appProjectPath}`);
 console.log('Restored the shared Windows Metro configuration');
 console.log('Restored the EdgeZ Windows TypeScript configuration');
