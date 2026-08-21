@@ -43,3 +43,30 @@ describe('EdgezMeshSession voice assembly', () => {
     session.dispose();
   });
 });
+
+describe('EdgezMeshSession beacon locations', () => {
+  it('uses received device GPS sensor coordinates for the node UI', () => {
+    const session = new EdgezMeshSession({sdk: new EdgezMeshSdk({transport: new FakeTransport()})});
+    const handleBeacon = (session as unknown as {handleBeacon(packet: Record<string, unknown>, beacon: Record<string, unknown>): void}).handleBeacon.bind(session);
+    handleBeacon({from: '42'}, {
+      userName: 'GPS node', latitude: 1, longitude: 2,
+      sensorData: [{type: 3, floatValue: 59.3293}, {type: 4, floatValue: 18.0686}],
+    });
+    const node = session.state.nodes.get(42n)!;
+    expect(node.latitude).toBeCloseTo(59.3293, 4);
+    expect(node.longitude).toBeCloseTo(18.0686, 4);
+    expect(session.state.sensorSamples.get(42n)?.at(-1)?.data).toMatchObject({latitude: 59.3293, longitude: 18.0686});
+    session.dispose();
+  });
+
+  it('accepts valid equator or prime-meridian coordinates but rejects 0,0', () => {
+    const session = new EdgezMeshSession({sdk: new EdgezMeshSdk({transport: new FakeTransport()})});
+    const handleBeacon = (session as unknown as {handleBeacon(packet: Record<string, unknown>, beacon: Record<string, unknown>): void}).handleBeacon.bind(session);
+    handleBeacon({from: '43'}, {userName: 'Equator node', latitude: 0, longitude: 18.0686});
+    handleBeacon({from: '44'}, {userName: 'Invalid node', latitude: 0, longitude: 0});
+    expect(session.state.nodes.get(43n)).toMatchObject({latitude: 0});
+    expect(session.state.nodes.get(44n)?.latitude).toBeUndefined();
+    expect(session.state.nodes.get(44n)?.longitude).toBeUndefined();
+    session.dispose();
+  });
+});

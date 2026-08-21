@@ -43,6 +43,13 @@ describe('EdgeZ protocol compatibility', () => {
       interface: Interface.halow,
     }));
     expect(settings.deviceSettings).toMatchObject({deviceGpsEnabled: true, geoFence: {name: 'Warehouse', geoIndex: 3}});
+
+    const location = decodeNetworkPacket(encodeNetworkPacket({
+      from: '42', locationUpdate: {latitude: 59.3293, longitude: 18.0686, timestampMs: '1720000000000'}, operation: Operation.broadcast, interface: Interface.halow,
+    }));
+    expect(location.locationUpdate).toMatchObject({timestampMs: '1720000000000'});
+    expect(location.locationUpdate.latitude).toBeCloseTo(59.3293, 4);
+    expect(location.locationUpdate.longitude).toBeCloseTo(18.0686, 4);
   });
 
   it('maps Flutter-compatible public talkgroup ports to mask bits', () => {

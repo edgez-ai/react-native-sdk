@@ -205,9 +205,14 @@ export class EdgezMeshSession {
   private handleBeacon(packet: ProtocolObject, beacon: ProtocolObject): void {
     const nodeNum = bi(packet.from); if (!nodeNum) return;
     if (this.current.status?.macAddress === nodeNum) return;
-    const node: EdgezMeshNode = {nodeNum, userUuid: uuidFromParts(bi(beacon.userIdHigh), bi(beacon.userIdLow)), displayName: string(beacon.userName), route: this.current.connection.toUpperCase(), lastSeenMs: Date.now(), marker: marker(num(beacon.marker)), publicKey: bytesFromNative(beacon.userPublicKey), latitude: beacon.latitude ? num(beacon.latitude) : undefined, longitude: beacon.longitude ? num(beacon.longitude) : undefined, deviceType: deviceType(num(beacon.deviceType)), geoFenceName: string((beacon.geoFence as ProtocolObject | undefined)?.name), geoIndex: num((beacon.geoFence as ProtocolObject | undefined)?.geoIndex), channelNumber: num(beacon.channelNumber), sleeping: !!beacon.sleeping, enabled: true};
+    const sensor = sensorData(beacon);
+    // Device GPS is delivered as SENSOR_LATITUDE / SENSOR_LONGITUDE by current
+    // firmware. Prefer it over the static beacon fields, as Flutter does.
+    const location = validLocation(sensor?.latitude, sensor?.longitude) ??
+      validLocation(beacon.latitude, beacon.longitude);
+    const node: EdgezMeshNode = {nodeNum, userUuid: uuidFromParts(bi(beacon.userIdHigh), bi(beacon.userIdLow)), displayName: string(beacon.userName), route: this.current.connection.toUpperCase(), lastSeenMs: Date.now(), marker: marker(num(beacon.marker)), publicKey: bytesFromNative(beacon.userPublicKey), latitude: location?.latitude, longitude: location?.longitude, deviceType: deviceType(num(beacon.deviceType)), geoFenceName: string((beacon.geoFence as ProtocolObject | undefined)?.name), geoIndex: num((beacon.geoFence as ProtocolObject | undefined)?.geoIndex), channelNumber: num(beacon.channelNumber), sleeping: !!beacon.sleeping, enabled: true};
     const nodes = new Map(this.current.nodes); const merged = mergeDiscovery(node, nodes.get(nodeNum)); nodes.set(nodeNum, merged);
-    const sensor = sensorData(beacon); const samples = new Map(this.current.sensorSamples); if (sensor) samples.set(nodeNum, [...samples.get(nodeNum) ?? [], {nodeNum, timestampMs: Date.now(), data: sensor}]);
+    const samples = new Map(this.current.sensorSamples); if (sensor) samples.set(nodeNum, [...samples.get(nodeNum) ?? [], {nodeNum, timestampMs: Date.now(), data: sensor}]);
     this.setState({...this.current, nodes, sensorSamples: samples, statusLine: `Beacon received from ${merged.displayName || nodeNum.toString(16)}`});
   }
 
@@ -259,3 +264,9 @@ function marker(value: number): string { return ['default','red','blue','purple'
 function deviceType(value: number): string { return ['Unspecified','Unknown','User','Gateway','Beacon','Sensor','Relay'][value] ?? 'Unspecified'; }
 function uuidFromParts(high: bigint, low: bigint): string { const text = `${BigInt.asUintN(64,high).toString(16).padStart(16,'0')}${BigInt.asUintN(64,low).toString(16).padStart(16,'0')}`; return `${text.slice(0,8)}-${text.slice(8,12)}-${text.slice(12,16)}-${text.slice(16,20)}-${text.slice(20)}`; }
 function sensorData(beacon: ProtocolObject): EdgezSensorData | undefined { const out: EdgezSensorData = {}; for (const item of beacon.sensorData ?? []) { const value = item.floatValue ?? item.intValue; if (value === undefined) continue; const keys: Record<number,keyof EdgezSensorData> = {1:'temperature',2:'humidity',3:'latitude',4:'longitude',5:'binaryLengthBytes',6:'accelX',7:'accelY',8:'accelZ',9:'gyroX',10:'gyroY',11:'gyroZ'}; const key = keys[num(item.type)]; if (key) (out as Record<string,number>)[key] = num(value); } return Object.keys(out).length ? out : undefined; }
+function validLocation(latitude: unknown, longitude: unknown): {latitude: number; longitude: number} | undefined {
+  if (latitude === undefined || longitude === undefined) return undefined;
+  const lat = num(latitude), lon = num(longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180 || (lat === 0 && lon === 0)) return undefined;
+  return {latitude: lat, longitude: lon};
+}
