@@ -143,14 +143,19 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     bool allowAssociationReset) noexcept {
   Enumeration::DeviceInformationPairing pairing{nullptr};
   bool usedExistingAssociation = false;
+  Close(false);
+  auto connectionGeneration = m_connectionGeneration.load(std::memory_order_acquire);
+  auto isCurrentConnection = [this, connectionGeneration]() noexcept {
+    return connectionGeneration == m_connectionGeneration.load(std::memory_order_acquire);
+  };
   try {
-    Close(false);
-    auto connectionGeneration = m_connectionGeneration.load(std::memory_order_relaxed);
     EmitLog("Connecting BLE " + AddressString(address));
-    m_device = co_await Bluetooth::BluetoothLEDevice::FromBluetoothAddressAsync(address);
-    if (!m_device) { promise.Reject("BLE device was not found; scan first"); co_return; }
+    auto device = co_await Bluetooth::BluetoothLEDevice::FromBluetoothAddressAsync(address);
+    if (!isCurrentConnection()) { promise.Reject("BLE connection attempt was superseded"); co_return; }
+    if (!device) { promise.Reject("BLE device was not found; scan first"); co_return; }
+    m_device = device;
 
-    pairing = m_device.DeviceInformation().Pairing();
+    pairing = device.DeviceInformation().Pairing();
     if (!pairing.IsPaired()) {
       if (!pairing.CanPair()) {
         promise.Reject("Windows reports that this BLE device cannot be paired");
@@ -167,6 +172,7 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
           if (args.PairingKind() == Enumeration::DevicePairingKinds::ConfirmOnly) args.Accept();
         });
       auto pairingResult = co_await customPairing.PairAsync(Enumeration::DevicePairingKinds::ConfirmOnly);
+      if (!isCurrentConnection()) { promise.Reject("BLE disconnected during pairing"); co_return; }
       auto pairingStatus = pairingResult.Status();
       if (pairingStatus != Enumeration::DevicePairingResultStatus::Paired &&
           pairingStatus != Enumeration::DevicePairingResultStatus::AlreadyPaired) {
@@ -178,30 +184,37 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       }
       EmitLog("Windows BLE pairing completed");
       co_await winrt::resume_after(std::chrono::milliseconds(750));
+      if (!isCurrentConnection()) { promise.Reject("BLE disconnected after pairing"); co_return; }
     } else {
       usedExistingAssociation = true;
       EmitLog("Windows reports an existing BLE pairing association");
     }
 
-    m_connectionStatusToken = m_device.ConnectionStatusChanged([this, connectionGeneration](Bluetooth::BluetoothLEDevice const &device, auto const &) {
-      if (connectionGeneration != m_connectionGeneration.load(std::memory_order_relaxed)) return;
-      if (device.ConnectionStatus() == Bluetooth::BluetoothConnectionStatus::Disconnected) {
-        EmitLog("BLE disconnected by Windows");
-        Close(true);
-      }
-    });
-    m_hasConnectionStatusHandler = true;
-
+    auto cacheMode = usedExistingAssociation
+      ? Bluetooth::BluetoothCacheMode::Cached
+      : Bluetooth::BluetoothCacheMode::Uncached;
+    EmitLog(usedExistingAssociation
+      ? "Discovering EdgeZ GATT service using the Windows cache"
+      : "Discovering EdgeZ GATT service without a stale Windows cache");
     Gatt::GattDeviceServicesResult services{nullptr};
     for (int attempt = 1; attempt <= 6; ++attempt) {
       winrt::hresult failureCode = S_OK;
       winrt::hstring failureMessage;
       try {
-        services = co_await m_device.GetGattServicesForUuidAsync(
-          ShortUuid(0xfff0), Bluetooth::BluetoothCacheMode::Cached);
+        services = co_await device.GetGattServicesForUuidAsync(
+          ShortUuid(0xfff0), cacheMode);
       } catch (winrt::hresult_error const &error) {
         failureCode = error.code();
         failureMessage = error.message();
+      }
+      if (!isCurrentConnection()) {
+        EmitLog("BLE setup stopped because Windows disconnected the device");
+        promise.Reject("BLE disconnected during GATT service discovery");
+        co_return;
+      }
+      if (device.ConnectionStatus() == Bluetooth::BluetoothConnectionStatus::Disconnected) {
+        throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_DEVICE_NOT_CONNECTED),
+          L"Windows disconnected the BLE device during service discovery");
       }
 
       if (failureCode >= 0 && services &&
@@ -220,36 +233,59 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
         : "status=" + std::to_string(services ? static_cast<int32_t>(services.Status()) : -1);
       EmitLog("BLE security/GATT not ready; retry=" + std::to_string(attempt) + " " + detail);
       co_await winrt::resume_after(std::chrono::milliseconds(500));
+      if (!isCurrentConnection()) { promise.Reject("BLE disconnected during GATT retry"); co_return; }
     }
-    m_service = services.Services().GetAt(0);
-    auto characteristics = co_await m_service.GetCharacteristicsAsync(Bluetooth::BluetoothCacheMode::Cached);
+    auto service = services.Services().GetAt(0);
+    auto characteristics = co_await service.GetCharacteristicsAsync(cacheMode);
+    if (!isCurrentConnection()) { promise.Reject("BLE disconnected during characteristic discovery"); co_return; }
     if (characteristics.Status() != Gatt::GattCommunicationStatus::Success) {
       EmitLog("EdgeZ BLE characteristic discovery failed; status=" +
               std::to_string(static_cast<int32_t>(characteristics.Status())));
       promise.Reject("Could not discover EdgeZ BLE characteristics"); Close(true); co_return;
     }
+    Gatt::GattCharacteristic rx{nullptr};
+    Gatt::GattCharacteristic ota{nullptr};
+    std::vector<Gatt::GattCharacteristic> notifications;
     for (auto const &characteristic : characteristics.Characteristics()) {
       auto uuid = characteristic.Uuid();
-      if (uuid == ShortUuid(0xfff1)) m_rx = characteristic;
-      if (uuid == ShortUuid(0xfff5)) m_ota = characteristic;
+      if (uuid == ShortUuid(0xfff1)) rx = characteristic;
+      if (uuid == ShortUuid(0xfff5)) ota = characteristic;
       if (uuid == ShortUuid(0xfff2) || uuid == ShortUuid(0xfff4) || uuid == ShortUuid(0xfff6) || uuid == ShortUuid(0xfff8)) {
         characteristic.ValueChanged({this, &EdgezReactNativeSdk::HandleValue});
         auto status = co_await characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
           Gatt::GattClientCharacteristicConfigurationDescriptorValue::Notify);
-        if (status == Gatt::GattCommunicationStatus::Success) m_notifications.push_back(characteristic);
+        if (!isCurrentConnection()) { promise.Reject("BLE disconnected during notification setup"); co_return; }
+        if (status == Gatt::GattCommunicationStatus::Success) notifications.push_back(characteristic);
         else EmitLog("BLE notification subscription failed; status=" + std::to_string(static_cast<int32_t>(status)));
       }
     }
-    if (!m_rx) {
+    if (!rx) {
       EmitLog("EdgeZ BLE control characteristic FFF1 is unavailable");
       promise.Reject("EdgeZ BLE control characteristic FFF1 is unavailable"); Close(true); co_return;
     }
+    if (!isCurrentConnection()) { promise.Reject("BLE disconnected before the control channel became ready"); co_return; }
+    m_service = service;
+    m_rx = rx;
+    m_ota = ota;
+    m_notifications = std::move(notifications);
+    m_connectionStatusToken = device.ConnectionStatusChanged([this, connectionGeneration](Bluetooth::BluetoothLEDevice const &connectedDevice, auto const &) {
+      if (connectionGeneration != m_connectionGeneration.load(std::memory_order_acquire)) return;
+      if (connectedDevice.ConnectionStatus() == Bluetooth::BluetoothConnectionStatus::Disconnected) {
+        EmitLog("BLE disconnected by Windows");
+        Close(true);
+      }
+    });
+    m_hasConnectionStatusHandler = true;
     EmitLog("BLE control channel ready");
     Emit({{"type", "connection"}, {"connection", "ble"}});
     Emit({{"type", "ready"}});
     promise.Resolve();
   } catch (winrt::hresult_error const &error) {
     EmitLog("BLE connection failed: " + winrt::to_string(error.message()));
+    if (!isCurrentConnection()) {
+      promise.Reject("BLE disconnected while setting up the control channel");
+      co_return;
+    }
     if (allowAssociationReset && usedExistingAssociation && pairing) {
       EmitLog("Existing Windows BLE pairing association is unusable; resetting it once");
       ResetAssociationAndReconnectAsync(address, promise, pairing);
@@ -257,6 +293,10 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     }
     promise.Reject(error.message().c_str());
     Close(true);
+  } catch (...) {
+    EmitLog("BLE connection failed with an unexpected native error");
+    promise.Reject("Unexpected Windows BLE connection error");
+    if (isCurrentConnection()) Close(true);
   }
 }
 
@@ -264,9 +304,14 @@ winrt::fire_and_forget EdgezReactNativeSdk::ResetAssociationAndReconnectAsync(
     uint64_t address,
     React::ReactPromise<void> promise,
     Enumeration::DeviceInformationPairing pairing) noexcept {
+  Close(false);
+  auto resetGeneration = m_connectionGeneration.load(std::memory_order_acquire);
+  auto isCurrentReset = [this, resetGeneration]() noexcept {
+    return resetGeneration == m_connectionGeneration.load(std::memory_order_acquire);
+  };
   try {
-    Close(false);
     auto result = co_await pairing.UnpairAsync();
+    if (!isCurrentReset()) { promise.Reject("BLE pairing reset was superseded"); co_return; }
     auto status = result.Status();
     EmitLog("Windows BLE unpair completed; status=" + std::to_string(static_cast<int32_t>(status)));
     if (status != Enumeration::DeviceUnpairingResultStatus::Unpaired &&
@@ -278,12 +323,17 @@ winrt::fire_and_forget EdgezReactNativeSdk::ResetAssociationAndReconnectAsync(
     }
 
     co_await winrt::resume_after(std::chrono::milliseconds(500));
+    if (!isCurrentReset()) { promise.Reject("BLE pairing retry was superseded"); co_return; }
     EmitLog("Retrying BLE connection with a fresh Windows pairing association");
     ConnectAsync(address, promise, false);
   } catch (winrt::hresult_error const &error) {
     EmitLog("Windows BLE pairing association reset failed: " + winrt::to_string(error.message()));
     promise.Reject(error.message().c_str());
     Close(true);
+  } catch (...) {
+    EmitLog("Windows BLE pairing association reset failed with an unexpected native error");
+    promise.Reject("Unexpected Windows BLE pairing reset error");
+    if (isCurrentReset()) Close(true);
   }
 }
 
@@ -327,13 +377,21 @@ void EdgezReactNativeSdk::QueuePacket(React::JSValueObject const &arguments, Rea
 }
 
 winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t> frame, React::ReactPromise<void> promise) noexcept {
+  auto writeGeneration = m_connectionGeneration.load(std::memory_order_acquire);
+  auto rx = m_rx;
+  auto service = m_service;
   try {
+    if (!rx || !service) { promise.Reject("BLE control channel is not ready"); co_return; }
     uint32_t maximum = 20;
-    if (m_service && m_service.Session()) maximum = std::max<uint32_t>(20, m_service.Session().MaxPduSize() - 3);
+    if (service.Session()) maximum = std::max<uint32_t>(20, service.Session().MaxPduSize() - 3);
     for (size_t offset = 0; offset < frame.size(); offset += maximum) {
       auto end = std::min(frame.size(), offset + maximum);
       std::vector<uint8_t> chunk(frame.begin() + offset, frame.begin() + end);
-      auto result = co_await m_rx.WriteValueWithResultAsync(Buffer(chunk), Gatt::GattWriteOption::WriteWithResponse);
+      auto result = co_await rx.WriteValueWithResultAsync(Buffer(chunk), Gatt::GattWriteOption::WriteWithResponse);
+      if (writeGeneration != m_connectionGeneration.load(std::memory_order_acquire)) {
+        promise.Reject("BLE disconnected during control write");
+        co_return;
+      }
       if (result.Status() != Gatt::GattCommunicationStatus::Success) {
         EmitLog("BLE control write failed; status=" + std::to_string(static_cast<int32_t>(result.Status())));
         promise.Reject("BLE control write failed");
@@ -344,6 +402,9 @@ winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t>
   } catch (winrt::hresult_error const &error) {
     EmitLog("BLE control write failed: " + winrt::to_string(error.message()));
     promise.Reject(error.message().c_str());
+  } catch (...) {
+    EmitLog("BLE control write failed with an unexpected native error");
+    promise.Reject("Unexpected Windows BLE control write error");
   }
 }
 
