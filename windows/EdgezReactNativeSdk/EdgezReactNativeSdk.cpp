@@ -63,7 +63,7 @@ void EdgezReactNativeSdk::StartBleScan(React::JSValueObject &&, React::ReactProm
     EmitLog("BLE scan started");
     promise.Resolve();
   } catch (winrt::hresult_error const &error) {
-    promise.Reject(winrt::to_string(error.message()));
+    promise.Reject(error.message().c_str());
   }
 }
 
@@ -118,7 +118,7 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(uint64_t address, React
     Emit({{"type", "ready"}});
     promise.Resolve();
   } catch (winrt::hresult_error const &error) {
-    promise.Reject(winrt::to_string(error.message()));
+    promise.Reject(error.message().c_str());
     Close(true);
   }
 }
@@ -169,7 +169,7 @@ winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t>
     }
     promise.Resolve();
   } catch (winrt::hresult_error const &error) {
-    promise.Reject(winrt::to_string(error.message()));
+    promise.Reject(error.message().c_str());
   }
 }
 
