@@ -6,6 +6,7 @@ namespace winrt::EdgezReactNativeSdk
 namespace Bluetooth = Windows::Devices::Bluetooth;
 namespace Advertisement = Windows::Devices::Bluetooth::Advertisement;
 namespace Gatt = Windows::Devices::Bluetooth::GenericAttributeProfile;
+namespace Enumeration = Windows::Devices::Enumeration;
 namespace Streams = Windows::Storage::Streams;
 
 static constexpr size_t MaximumPacketLength = 512;
@@ -90,9 +91,42 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(uint64_t address, React
     EmitLog("Connecting BLE " + AddressString(address));
     m_device = co_await Bluetooth::BluetoothLEDevice::FromBluetoothAddressAsync(address);
     if (!m_device) { promise.Reject("BLE device was not found; scan first"); co_return; }
-    m_device.ConnectionStatusChanged([this](Bluetooth::BluetoothLEDevice const &device, auto const &) {
+
+    auto pairing = m_device.DeviceInformation().Pairing();
+    if (!pairing.IsPaired()) {
+      if (!pairing.CanPair()) {
+        promise.Reject("Windows reports that this BLE device cannot be paired");
+        Close(true);
+        co_return;
+      }
+
+      EmitLog("Pairing BLE device with Windows");
+      auto customPairing = pairing.Custom();
+      auto pairingRequested = customPairing.PairingRequested(
+        winrt::auto_revoke,
+        [](Enumeration::DeviceInformationCustomPairing const &,
+           Enumeration::DevicePairingRequestedEventArgs const &args) {
+          if (args.PairingKind() == Enumeration::DevicePairingKinds::ConfirmOnly) args.Accept();
+        });
+      auto pairingResult = co_await customPairing.PairAsync(Enumeration::DevicePairingKinds::ConfirmOnly);
+      auto pairingStatus = pairingResult.Status();
+      if (pairingStatus != Enumeration::DevicePairingResultStatus::Paired &&
+          pairingStatus != Enumeration::DevicePairingResultStatus::AlreadyPaired) {
+        auto status = std::to_string(static_cast<int32_t>(pairingStatus));
+        EmitLog("Windows BLE pairing failed; status=" + status);
+        promise.Reject(("Windows BLE pairing failed; status=" + status).c_str());
+        Close(true);
+        co_return;
+      }
+      EmitLog("Windows BLE pairing completed");
+    } else {
+      EmitLog("Using existing Windows BLE bond");
+    }
+
+    m_connectionStatusToken = m_device.ConnectionStatusChanged([this](Bluetooth::BluetoothLEDevice const &device, auto const &) {
       if (device.ConnectionStatus() == Bluetooth::BluetoothConnectionStatus::Disconnected) Close(true);
     });
+    m_hasConnectionStatusHandler = true;
     auto services = co_await m_device.GetGattServicesForUuidAsync(ShortUuid(0xfff0), Bluetooth::BluetoothCacheMode::Uncached);
     if (services.Status() != Gatt::GattCommunicationStatus::Success || services.Services().Size() == 0) {
       promise.Reject("EdgeZ BLE service FFF0 is unavailable"); Close(true); co_return;
@@ -135,6 +169,9 @@ void EdgezReactNativeSdk::Close(bool emitDisconnected) noexcept {
   m_ota = nullptr;
   if (m_service) m_service.Close();
   m_service = nullptr;
+  if (m_device && m_hasConnectionStatusHandler) m_device.ConnectionStatusChanged(m_connectionStatusToken);
+  m_hasConnectionStatusHandler = false;
+  m_connectionStatusToken = {};
   if (m_device) m_device.Close();
   m_device = nullptr;
   { std::scoped_lock lock(m_frameMutex); m_receive.clear(); m_forwardReceive.clear(); }

@@ -88,6 +88,8 @@ private:
   React::ReactContext m_context;
   Windows::Devices::Bluetooth::Advertisement::BluetoothLEAdvertisementWatcher m_watcher{nullptr};
   Windows::Devices::Bluetooth::BluetoothLEDevice m_device{nullptr};
+  winrt::event_token m_connectionStatusToken{};
+  bool m_hasConnectionStatusHandler{false};
   Windows::Devices::Bluetooth::GenericAttributeProfile::GattDeviceService m_service{nullptr};
   Windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic m_rx{nullptr};
   Windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic m_ota{nullptr};
