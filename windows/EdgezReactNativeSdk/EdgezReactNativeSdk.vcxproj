@@ -16,6 +16,13 @@
   </PropertyGroup>
   <PropertyGroup Label="ReactNativeWindowsProps">
     <ReactNativeWindowsDir Condition="'$(ReactNativeWindowsDir)' == ''">$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory), 'node_modules\react-native-windows\package.json'))\node_modules\react-native-windows\</ReactNativeWindowsDir>
+    <!--
+      Local/file dependencies can resolve this project through a symlink, causing
+      RNW's default codegen directory lookup to stop at the SDK package root.
+      Resolve it from the RNW installation instead so the consuming app's CLI can
+      discover the codegen-windows command.
+    -->
+    <CodegenCommandWorkingDir Condition="'$(CodegenCommandWorkingDir)' == ''">$(ReactNativeWindowsDir)\..\..</CodegenCommandWorkingDir>
     <RunAutolinkCheck>false</RunAutolinkCheck>
   </PropertyGroup>
   <Import Project="$(ReactNativeWindowsDir)\PropertySheets\External\Microsoft.ReactNative.WindowsSdk.Default.props" />
