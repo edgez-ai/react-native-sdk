@@ -1,8 +1,8 @@
 # EdgeZ React Native SDK
 
 React Native/Expo SDK for EdgeZ HaLow mesh devices, ported from the EdgeZ
-Flutter SDK. The current native transport supports Android; iOS is not yet
-implemented.
+Flutter SDK. Native transports are included for Android, macOS, and Windows;
+iOS is not yet implemented.
 
 ## Included
 
@@ -19,6 +19,7 @@ implemented.
 - identity, BLE preference, and installed-driver persistence
 - stateful `EdgezMeshSession` and React `useEdgezMesh` hooks
 - an Expo SDK 57 development-client example
+- a shared-UI React Native desktop example for macOS and Windows
 
 Live voice-call audio still needs to be ported from the Flutter native plugin.
 Its public methods report `not_available` rather than silently behaving
@@ -31,8 +32,12 @@ npm install @edgez/react-native-sdk \
   @react-native-async-storage/async-storage
 ```
 
-The SDK contains an Android native module. Rebuild the native application after
-installing it; Expo Go cannot load it.
+The SDK contains native modules, so rebuild the native application after
+installing it; Expo Go cannot load them.
+
+On macOS the SDK autolinks through CocoaPods. On Windows it autolinks the C++
+React Native Windows project and the consuming app must declare the Bluetooth
+device capability.
 
 ## Basic use
 
@@ -96,6 +101,34 @@ Nodes tab groups discovered devices by HaLow channel, manages the five public
 talkgroups, shows routes and node details, and exposes channel selection. The
 Settings tab includes user identity/location, country/bandwidth/channel setup,
 and device GPS, geofence, sensor, upstream network, and sleep controls.
+
+## Desktop example
+
+The [`desktop-example`](desktop-example/) reuses the same Nodes, Messages, and
+Settings source as the Expo example. The macOS host uses React Native 0.81.6
+with React Native macOS 0.81.9. Its [`windows-app`](desktop-example/windows-app/)
+uses the actively supported React Native 0.84.1 and React Native Windows 0.84.0.
+The hosts are separate because the current desktop platform versions do not
+share a compatible React Native minor.
+
+```sh
+cd desktop-example
+npm install
+
+# macOS
+npx pod-install macos
+npm run macos
+
+# Windows (run on Windows once before the first build)
+cd windows-app
+npm install
+npm run windows:init
+npm run windows
+```
+
+Desktop currently supports BLE scan/connect, framing, mesh setup, Nodes,
+Settings, and encrypted text messages. OTA, OS notifications/location, and
+recorded voice are still Android-only and fail explicitly on desktop.
 
 ## Development
 

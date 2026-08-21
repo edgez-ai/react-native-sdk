@@ -87,7 +87,7 @@ export class EdgezMeshSession {
 
   async connectBle(deviceId: string): Promise<void> {
     this.setState({...this.current, bleConnecting: true, status: undefined, deviceSettings: undefined, statusLine: `Starting BLE connection to ${deviceId}`});
-    try { await this.sdk.connectBle(deviceId); this.setState({...this.current, bleReady: false, statusLine: 'BLE connection requested; waiting for Android'}); }
+    try { await this.sdk.connectBle(deviceId); this.setState({...this.current, bleReady: false, statusLine: 'BLE connection requested; waiting for the control service'}); }
     catch (error) { this.setState({...this.current, bleConnecting: false, statusLine: `BLE connect failed: ${error}`}); throw error; }
   }
 

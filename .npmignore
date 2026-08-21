@@ -1,0 +1,6 @@
+android/.gradle/
+android/build/
+android/local.properties
+desktop-example/
+example/
+node_modules/

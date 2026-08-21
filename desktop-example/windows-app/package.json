@@ -1,0 +1,39 @@
+{
+  "name": "edgez-windows-example",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "react-native start",
+    "windows:init": "react-native init-windows --overwrite --no-telemetry && node scripts/configure-windows.mjs",
+    "windows": "react-native run-windows --no-telemetry",
+    "build:windows": "react-native run-windows --release --no-launch --no-packager --no-telemetry",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@edgez/react-native-sdk": "file:../..",
+    "@noble/ciphers": "^1.3.0",
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "protobufjs": "^7.5.4",
+    "react": "19.2.3",
+    "react-native": "0.84.1",
+    "react-native-get-random-values": "2.0.0",
+    "react-native-windows": "0.84.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@babel/runtime": "^7.25.0",
+    "@react-native-community/cli": "20.1.0",
+    "@react-native-community/cli-platform-android": "20.1.0",
+    "@react-native-community/cli-platform-ios": "20.1.0",
+    "@react-native/babel-preset": "0.84.1",
+    "@react-native/metro-config": "0.84.1",
+    "@react-native/typescript-config": "0.84.1",
+    "@types/react": "^19.2.0",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=22.11.0"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "extends": "@react-native/typescript-config",
+  "compilerOptions": {
+    "noEmit": true,
+    "strict": true
+  },
+  "include": ["App.tsx", "../example/src/**/*.ts", "../example/src/**/*.tsx"],
+  "exclude": ["node_modules", "macos/Pods"]
+}

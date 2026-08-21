@@ -6,6 +6,11 @@ lib/
 example/.expo/
 example/android/
 example/node_modules/
+desktop-example/node_modules/
+desktop-example/macos/Pods/
+desktop-example/macos/build/
+desktop-example/windows-app/node_modules/
+desktop-example/windows-app/windows/
 android/.gradle/
 android/build/
 android/local.properties

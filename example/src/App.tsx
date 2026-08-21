@@ -1,6 +1,5 @@
 import React, {useEffect, useMemo, useState} from 'react';
 import {ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
-import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 import {
   EdgezBleConfigurationStore, EdgezIdentityStore, EdgezMeshSdk, EdgezMeshSession,
   edgezNodeDisplayName, edgezNodeOpensConversation, edgezPublicChannelPorts,
@@ -9,6 +8,7 @@ import {
 import {NodesScreen} from './NodesScreen';
 import {SettingsScreen} from './SettingsScreen';
 import {Button, Card, ui} from './ui';
+import {SafeAreaFrame} from './SafeAreaFrame';
 
 type Tab = 'Nodes' | 'Messages' | 'Settings';
 
@@ -95,12 +95,12 @@ export default function App() {
   /> : tab === 'Settings' ? <SettingsScreen state={state} session={session} config={config} selectedBleDevice={state.bleDevices.get(selectedBleDevice?.id ?? '') ?? selectedBleDevice} bleAutoConnect={bleAutoConnect} onSelectBleDevice={selectBleDevice} onConnectBleDevice={connectBleDevice} onBleAutoConnectChanged={changeBleAutoConnect} onConfigChanged={setConfig} onSaveConfig={saveConfig} onRegenerateIdentity={regenerateIdentity} />
     : <MessagesScreen state={state} session={session} selected={selected} onSelected={setSelected} message={message} onMessage={setMessage} recording={recording} onRecording={setRecording} />;
 
-  return <SafeAreaProvider><SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+  return <SafeAreaFrame style={styles.safe}>
     <StatusBar barStyle="light-content" />
     <View style={styles.header}><Text style={styles.title}>EdgeZ Mesh</Text><Text style={styles.status}>{state.statusLine}</Text></View>
     <View style={styles.content}>{content}</View>
     <View style={styles.tabs}>{(['Nodes', 'Messages', 'Settings'] as Tab[]).map(item => <TouchableOpacity key={item} style={[styles.tab, tab === item && styles.tabActive]} onPress={() => setTab(item)}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></TouchableOpacity>)}</View>
-  </SafeAreaView></SafeAreaProvider>;
+  </SafeAreaFrame>;
 }
 
 function MessagesScreen({state, session, selected, onSelected, message, onMessage, recording, onRecording}: {state: ReturnType<typeof useEdgezMesh>; session: EdgezMeshSession; selected?: bigint; onSelected: (node?: bigint) => void; message: string; onMessage: (value: string) => void; recording: boolean; onRecording: (value: boolean) => void}) {
