@@ -158,31 +158,10 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     pairing = device.DeviceInformation().Pairing();
     auto requiredPairingProtection = Enumeration::DevicePairingProtectionLevel::EncryptionAndAuthentication;
     if (!pairing.IsPaired()) {
-      if (!pairing.CanPair()) {
-        promise.Reject("Windows reports that this BLE device cannot be paired");
-        Close(true);
-        co_return;
-      }
-
-      // FFF1 requires an authenticated (MITM-protected) link. Use Windows'
-      // standard pairing ceremony so it can ask the user for the factory PIN;
-      // ConfirmOnly creates an encrypted Just Works bond that FFF1 rejects.
-      EmitLog("Pairing BLE device with Windows using authenticated protection; enter the factory PIN if prompted");
-      auto pairingResult = co_await pairing.PairAsync(requiredPairingProtection);
-      if (!isCurrentConnection()) { promise.Reject("BLE disconnected during pairing"); co_return; }
-      auto pairingStatus = pairingResult.Status();
-      if (pairingStatus != Enumeration::DevicePairingResultStatus::Paired &&
-          pairingStatus != Enumeration::DevicePairingResultStatus::AlreadyPaired) {
-        auto status = std::to_string(static_cast<int32_t>(pairingStatus));
-        EmitLog("Windows BLE pairing failed; status=" + status);
-        promise.Reject(("Windows BLE pairing failed; status=" + status).c_str());
-        Close(true);
-        co_return;
-      }
-      EmitLog("Windows BLE pairing completed; protection=" +
-        std::to_string(static_cast<int32_t>(pairing.ProtectionLevel())));
-      co_await winrt::resume_after(std::chrono::milliseconds(750));
-      if (!isCurrentConnection()) { promise.Reject("BLE disconnected after pairing"); co_return; }
+      // Preserve the original SDK behavior: do not initiate custom pairing.
+      // FFF1 requests authenticated protection below, so the first control
+      // write asks Windows to display its native factory-PIN dialog.
+      EmitLog("No Windows BLE pairing association; authenticated FFF1 access will request the native PIN dialog");
     } else {
       usedExistingAssociation = true;
       auto protection = pairing.ProtectionLevel();
