@@ -156,6 +156,7 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     m_device = device;
 
     pairing = device.DeviceInformation().Pairing();
+    auto requiredPairingProtection = Enumeration::DevicePairingProtectionLevel::EncryptionAndAuthentication;
     if (!pairing.IsPaired()) {
       if (!pairing.CanPair()) {
         promise.Reject("Windows reports that this BLE device cannot be paired");
@@ -163,15 +164,11 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
         co_return;
       }
 
-      EmitLog("Pairing BLE device with Windows");
-      auto customPairing = pairing.Custom();
-      auto pairingRequested = customPairing.PairingRequested(
-        winrt::auto_revoke,
-        [](Enumeration::DeviceInformationCustomPairing const &,
-           Enumeration::DevicePairingRequestedEventArgs const &args) {
-          if (args.PairingKind() == Enumeration::DevicePairingKinds::ConfirmOnly) args.Accept();
-        });
-      auto pairingResult = co_await customPairing.PairAsync(Enumeration::DevicePairingKinds::ConfirmOnly);
+      // FFF1 requires an authenticated (MITM-protected) link. Use Windows'
+      // standard pairing ceremony so it can ask the user for the factory PIN;
+      // ConfirmOnly creates an encrypted Just Works bond that FFF1 rejects.
+      EmitLog("Pairing BLE device with Windows using authenticated protection; enter the factory PIN if prompted");
+      auto pairingResult = co_await pairing.PairAsync(requiredPairingProtection);
       if (!isCurrentConnection()) { promise.Reject("BLE disconnected during pairing"); co_return; }
       auto pairingStatus = pairingResult.Status();
       if (pairingStatus != Enumeration::DevicePairingResultStatus::Paired &&
@@ -182,12 +179,25 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
         Close(true);
         co_return;
       }
-      EmitLog("Windows BLE pairing completed");
+      EmitLog("Windows BLE pairing completed; protection=" +
+        std::to_string(static_cast<int32_t>(pairing.ProtectionLevel())));
       co_await winrt::resume_after(std::chrono::milliseconds(750));
       if (!isCurrentConnection()) { promise.Reject("BLE disconnected after pairing"); co_return; }
     } else {
       usedExistingAssociation = true;
-      EmitLog("Windows reports an existing BLE pairing association");
+      auto protection = pairing.ProtectionLevel();
+      EmitLog("Windows reports an existing BLE pairing association; protection=" +
+        std::to_string(static_cast<int32_t>(protection)));
+      if (protection != requiredPairingProtection) {
+        EmitLog("Existing Windows BLE association is not authenticated; resetting it for factory-PIN pairing");
+        if (allowAssociationReset) {
+          ResetAssociationAndReconnectAsync(address, promise, pairing);
+        } else {
+          promise.Reject("Windows BLE pairing is not authenticated; forget the device and pair again with its factory PIN");
+          Close(true);
+        }
+        co_return;
+      }
     }
 
     // Enumerating the complete service table is more compatible with Windows
@@ -242,19 +252,50 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       if (!isCurrentConnection()) { promise.Reject("BLE disconnected during GATT retry"); co_return; }
     }
     if (service.Session()) service.Session().MaintainConnection(true);
-    auto characteristics = co_await service.GetCharacteristicsAsync(cacheMode);
-    if (!isCurrentConnection()) { promise.Reject("BLE disconnected during characteristic discovery"); co_return; }
-    if (characteristics.Status() != Gatt::GattCommunicationStatus::Success) {
-      EmitLog("EdgeZ BLE characteristic discovery failed; status=" +
-              std::to_string(static_cast<int32_t>(characteristics.Status())));
-      promise.Reject("Could not discover EdgeZ BLE characteristics"); Close(true); co_return;
+
+    // Windows has already restored the FFF2 CCCD by this point, which means
+    // its system GATT cache contains characteristic objects. Read that local
+    // snapshot first; GetCharacteristicsAsync can otherwise issue another
+    // remote ATT discovery that blocks until Windows tears down the link.
+    std::vector<Gatt::GattCharacteristic> discoveredCharacteristics;
+    try {
+      for (auto const &characteristic : service.GetAllCharacteristics()) {
+        discoveredCharacteristics.push_back(characteristic);
+      }
+      EmitLog("Windows cached GATT characteristics=" + std::to_string(discoveredCharacteristics.size()));
+    } catch (winrt::hresult_error const &error) {
+      EmitLog("Windows cached characteristic lookup failed: " + winrt::to_string(error.message()));
+    }
+
+    auto cachedControl = std::find_if(discoveredCharacteristics.begin(), discoveredCharacteristics.end(), [](auto const &characteristic) {
+      return characteristic.Uuid() == ShortUuid(0xfff1);
+    });
+    auto cachedControlTx = std::find_if(discoveredCharacteristics.begin(), discoveredCharacteristics.end(), [](auto const &characteristic) {
+      return characteristic.Uuid() == ShortUuid(0xfff2);
+    });
+    if (cachedControl == discoveredCharacteristics.end() || cachedControlTx == discoveredCharacteristics.end()) {
+      EmitLog("Cached GATT table is missing FFF1/FFF2; requesting characteristics from the device");
+      auto characteristics = co_await service.GetCharacteristicsAsync(cacheMode);
+      if (!isCurrentConnection()) { promise.Reject("BLE disconnected during characteristic discovery"); co_return; }
+      if (characteristics.Status() != Gatt::GattCommunicationStatus::Success) {
+        EmitLog("EdgeZ BLE characteristic discovery failed; status=" +
+                std::to_string(static_cast<int32_t>(characteristics.Status())));
+        promise.Reject("Could not discover EdgeZ BLE characteristics"); Close(true); co_return;
+      }
+      discoveredCharacteristics.clear();
+      for (auto const &characteristic : characteristics.Characteristics()) {
+        discoveredCharacteristics.push_back(characteristic);
+      }
     }
     Gatt::GattCharacteristic rx{nullptr};
     Gatt::GattCharacteristic ota{nullptr};
     std::vector<Gatt::GattCharacteristic> notifications;
-    for (auto const &characteristic : characteristics.Characteristics()) {
+    for (auto const &characteristic : discoveredCharacteristics) {
       auto uuid = characteristic.Uuid();
-      if (uuid == ShortUuid(0xfff1)) rx = characteristic;
+      if (uuid == ShortUuid(0xfff1)) {
+        characteristic.ProtectionLevel(Gatt::GattProtectionLevel::EncryptionAndAuthenticationRequired);
+        rx = characteristic;
+      }
       if (uuid == ShortUuid(0xfff5)) ota = characteristic;
       if (uuid == ShortUuid(0xfff2) || uuid == ShortUuid(0xfff4) || uuid == ShortUuid(0xfff6) || uuid == ShortUuid(0xfff8)) {
         characteristic.ValueChanged({this, &EdgezReactNativeSdk::HandleValue});
