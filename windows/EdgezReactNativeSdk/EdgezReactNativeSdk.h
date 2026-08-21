@@ -78,8 +78,8 @@ private:
   void Emit(React::JSValueObject &&event) noexcept;
   void EmitLog(std::string const &message) noexcept;
   void QueuePacket(React::JSValueObject const &arguments, React::ReactPromise<void> const &promise) noexcept;
-  winrt::fire_and_forget ConnectAsync(uint64_t address, React::ReactPromise<void> promise, bool allowBondReset) noexcept;
-  winrt::fire_and_forget ResetBondAndReconnectAsync(
+  winrt::fire_and_forget ConnectAsync(uint64_t address, React::ReactPromise<void> promise, bool allowAssociationReset) noexcept;
+  winrt::fire_and_forget ResetAssociationAndReconnectAsync(
       uint64_t address,
       React::ReactPromise<void> promise,
       Windows::Devices::Enumeration::DeviceInformationPairing pairing) noexcept;
@@ -94,6 +94,7 @@ private:
   Windows::Devices::Bluetooth::BluetoothLEDevice m_device{nullptr};
   winrt::event_token m_connectionStatusToken{};
   bool m_hasConnectionStatusHandler{false};
+  std::atomic_uint64_t m_connectionGeneration{0};
   Windows::Devices::Bluetooth::GenericAttributeProfile::GattDeviceService m_service{nullptr};
   Windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic m_rx{nullptr};
   Windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic m_ota{nullptr};
