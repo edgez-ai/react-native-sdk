@@ -100,6 +100,10 @@ jobs:
           2. Keep the DLL and Bundle files beside EdgezWindowsExample.exe.
           3. Double-click EdgezWindowsExample.exe.
 
+          For BLE troubleshooting, attach this rotating diagnostic log:
+          %LOCALAPPDATA%\EdgezWindowsExample\edgez-windows.log
+          The previous 2 MB log is retained as edgez-windows.log.1.
+
           Windows SmartScreen may warn because this development executable is not
           signed by a public code-signing authority. Only run archives downloaded
           from the official edgez-ai/react-native-sdk GitHub release.

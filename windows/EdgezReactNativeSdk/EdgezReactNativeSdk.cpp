@@ -10,6 +10,49 @@ namespace Enumeration = Windows::Devices::Enumeration;
 namespace Streams = Windows::Storage::Streams;
 
 static constexpr size_t MaximumPacketLength = 512;
+static constexpr uintmax_t MaximumDiagnosticLogLength = 2 * 1024 * 1024;
+
+static std::filesystem::path DiagnosticLogPath() {
+  std::vector<wchar_t> localAppData(32768);
+  auto length = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData.data(), static_cast<DWORD>(localAppData.size()));
+  auto directory = length > 0 && length < localAppData.size()
+    ? std::filesystem::path{localAppData.data()}
+    : std::filesystem::temp_directory_path();
+  directory /= L"EdgezWindowsExample";
+  std::filesystem::create_directories(directory);
+  return directory / L"edgez-windows.log";
+}
+
+static std::string DiagnosticLogPathString() noexcept {
+  try {
+    return winrt::to_string(winrt::hstring{DiagnosticLogPath().c_str()});
+  } catch (...) {
+    return "%LOCALAPPDATA%\\EdgezWindowsExample\\edgez-windows.log";
+  }
+}
+
+static void WriteDiagnosticLog(std::string const &message) noexcept {
+  static std::mutex logMutex;
+  try {
+    std::scoped_lock lock(logMutex);
+    auto path = DiagnosticLogPath();
+    std::error_code error;
+    if (std::filesystem::exists(path, error) && std::filesystem::file_size(path, error) >= MaximumDiagnosticLogLength) {
+      auto previous = path;
+      previous += L".1";
+      std::filesystem::remove(previous, error);
+      error.clear();
+      std::filesystem::rename(path, previous, error);
+    }
+
+    std::ofstream stream(path, std::ios::app);
+    if (!stream) return;
+    auto now = std::time(nullptr);
+    std::tm utc{};
+    gmtime_s(&utc, &now);
+    stream << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ") << " " << message << '\n';
+  } catch (...) {}
+}
 
 static winrt::guid ShortUuid(uint32_t value) {
   return Bluetooth::BluetoothUuidHelper::FromShortId(value);
@@ -37,13 +80,19 @@ std::string RNGetRandomValues::GetRandomBase64(double byteLength) noexcept {
   }
 }
 
-void EdgezReactNativeSdk::Initialize(React::ReactContext const &reactContext) noexcept { m_context = reactContext; }
+void EdgezReactNativeSdk::Initialize(React::ReactContext const &reactContext) noexcept {
+  m_context = reactContext;
+  WriteDiagnosticLog("Windows SDK initialized; diagnostic log=" + DiagnosticLogPathString());
+}
 
 void EdgezReactNativeSdk::Emit(React::JSValueObject &&event) noexcept {
   m_context.EmitJSEvent(L"RCTDeviceEventEmitter", L"EdgezMeshEvent", std::move(event));
 }
 
-void EdgezReactNativeSdk::EmitLog(std::string const &message) noexcept { Emit({{"type", "log"}, {"log", message}}); }
+void EdgezReactNativeSdk::EmitLog(std::string const &message) noexcept {
+  WriteDiagnosticLog(message);
+  Emit({{"type", "log"}, {"log", message}});
+}
 
 void EdgezReactNativeSdk::StartBleScan(React::JSValueObject &&, React::ReactPromise<void> &&promise) noexcept {
   try {
@@ -64,12 +113,14 @@ void EdgezReactNativeSdk::StartBleScan(React::JSValueObject &&, React::ReactProm
     EmitLog("BLE scan started");
     promise.Resolve();
   } catch (winrt::hresult_error const &error) {
+    EmitLog("BLE scan failed: " + winrt::to_string(error.message()));
     promise.Reject(error.message().c_str());
   }
 }
 
 void EdgezReactNativeSdk::StopBleScan(React::JSValueObject &&, React::ReactPromise<void> &&promise) noexcept {
   if (m_watcher && m_watcher.Status() == Advertisement::BluetoothLEAdvertisementWatcherStatus::Started) m_watcher.Stop();
+  EmitLog("BLE scan stopped");
   promise.Resolve();
 }
 
@@ -81,6 +132,7 @@ void EdgezReactNativeSdk::ConnectBle(React::JSValueObject &&arguments, React::Re
     if (m_watcher && m_watcher.Status() == Advertisement::BluetoothLEAdvertisementWatcherStatus::Started) m_watcher.Stop();
     ConnectAsync(address, promise);
   } catch (...) {
+    EmitLog("BLE connection rejected: invalid scanned device ID");
     promise.Reject("Invalid BLE device ID; scan again before connecting");
   }
 }
@@ -124,16 +176,23 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(uint64_t address, React
     }
 
     m_connectionStatusToken = m_device.ConnectionStatusChanged([this](Bluetooth::BluetoothLEDevice const &device, auto const &) {
-      if (device.ConnectionStatus() == Bluetooth::BluetoothConnectionStatus::Disconnected) Close(true);
+      if (device.ConnectionStatus() == Bluetooth::BluetoothConnectionStatus::Disconnected) {
+        EmitLog("BLE disconnected by Windows");
+        Close(true);
+      }
     });
     m_hasConnectionStatusHandler = true;
     auto services = co_await m_device.GetGattServicesForUuidAsync(ShortUuid(0xfff0), Bluetooth::BluetoothCacheMode::Uncached);
     if (services.Status() != Gatt::GattCommunicationStatus::Success || services.Services().Size() == 0) {
+      EmitLog("EdgeZ BLE service discovery failed; status=" + std::to_string(static_cast<int32_t>(services.Status())) +
+              " services=" + std::to_string(services.Services().Size()));
       promise.Reject("EdgeZ BLE service FFF0 is unavailable"); Close(true); co_return;
     }
     m_service = services.Services().GetAt(0);
     auto characteristics = co_await m_service.GetCharacteristicsAsync(Bluetooth::BluetoothCacheMode::Uncached);
     if (characteristics.Status() != Gatt::GattCommunicationStatus::Success) {
+      EmitLog("EdgeZ BLE characteristic discovery failed; status=" +
+              std::to_string(static_cast<int32_t>(characteristics.Status())));
       promise.Reject("Could not discover EdgeZ BLE characteristics"); Close(true); co_return;
     }
     for (auto const &characteristic : characteristics.Characteristics()) {
@@ -145,13 +204,19 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(uint64_t address, React
         auto status = co_await characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
           Gatt::GattClientCharacteristicConfigurationDescriptorValue::Notify);
         if (status == Gatt::GattCommunicationStatus::Success) m_notifications.push_back(characteristic);
+        else EmitLog("BLE notification subscription failed; status=" + std::to_string(static_cast<int32_t>(status)));
       }
     }
-    if (!m_rx) { promise.Reject("EdgeZ BLE control characteristic FFF1 is unavailable"); Close(true); co_return; }
+    if (!m_rx) {
+      EmitLog("EdgeZ BLE control characteristic FFF1 is unavailable");
+      promise.Reject("EdgeZ BLE control characteristic FFF1 is unavailable"); Close(true); co_return;
+    }
+    EmitLog("BLE control channel ready");
     Emit({{"type", "connection"}, {"connection", "ble"}});
     Emit({{"type", "ready"}});
     promise.Resolve();
   } catch (winrt::hresult_error const &error) {
+    EmitLog("BLE connection failed: " + winrt::to_string(error.message()));
     promise.Reject(error.message().c_str());
     Close(true);
   }
@@ -159,6 +224,7 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(uint64_t address, React
 
 void EdgezReactNativeSdk::Disconnect(React::JSValueObject &&, React::ReactPromise<void> &&promise) noexcept {
   if (m_watcher && m_watcher.Status() == Advertisement::BluetoothLEAdvertisementWatcherStatus::Started) m_watcher.Stop();
+  EmitLog("BLE disconnect requested");
   Close(true);
   promise.Resolve();
 }
@@ -202,10 +268,15 @@ winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t>
       auto end = std::min(frame.size(), offset + maximum);
       std::vector<uint8_t> chunk(frame.begin() + offset, frame.begin() + end);
       auto result = co_await m_rx.WriteValueWithResultAsync(Buffer(chunk), Gatt::GattWriteOption::WriteWithResponse);
-      if (result.Status() != Gatt::GattCommunicationStatus::Success) { promise.Reject("BLE control write failed"); co_return; }
+      if (result.Status() != Gatt::GattCommunicationStatus::Success) {
+        EmitLog("BLE control write failed; status=" + std::to_string(static_cast<int32_t>(result.Status())));
+        promise.Reject("BLE control write failed");
+        co_return;
+      }
     }
     promise.Resolve();
   } catch (winrt::hresult_error const &error) {
+    EmitLog("BLE control write failed: " + winrt::to_string(error.message()));
     promise.Reject(error.message().c_str());
   }
 }
