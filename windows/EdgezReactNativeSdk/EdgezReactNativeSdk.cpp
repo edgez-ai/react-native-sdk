@@ -388,22 +388,47 @@ winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t>
   auto service = m_service;
   try {
     if (!rx || !service) { promise.Reject("BLE control channel is not ready"); co_return; }
-    uint32_t maximum = 20;
-    if (service.Session()) maximum = std::max<uint32_t>(20, service.Session().MaxPduSize() - 3);
+    // The firmware control endpoint reassembles the EdgeZ frame across ATT
+    // writes. Keep Windows writes at the default-MTU payload size: MaxPduSize
+    // can describe a larger session PDU than this characteristic accepts in a
+    // single Write Request, which results in ATT Invalid Attribute Value Length.
+    constexpr uint32_t maximum = 20;
+    EmitLog("BLE control write started; bytes=" + std::to_string(frame.size()) + " chunk=20");
     for (size_t offset = 0; offset < frame.size(); offset += maximum) {
       auto end = std::min(frame.size(), offset + maximum);
       std::vector<uint8_t> chunk(frame.begin() + offset, frame.begin() + end);
-      auto result = co_await rx.WriteValueWithResultAsync(Buffer(chunk), Gatt::GattWriteOption::WriteWithResponse);
-      if (writeGeneration != m_connectionGeneration.load(std::memory_order_acquire)) {
-        promise.Reject("BLE disconnected during control write");
-        co_return;
+      bool written = false;
+      for (int attempt = 1; attempt <= 4; ++attempt) {
+        auto result = co_await rx.WriteValueWithResultAsync(Buffer(chunk), Gatt::GattWriteOption::WriteWithResponse);
+        if (writeGeneration != m_connectionGeneration.load(std::memory_order_acquire)) {
+          promise.Reject("BLE disconnected during control write");
+          co_return;
+        }
+        if (result.Status() == Gatt::GattCommunicationStatus::Success) {
+          written = true;
+          break;
+        }
+
+        auto protocolError = result.ProtocolError();
+        auto protocolErrorCode = protocolError ? static_cast<int32_t>(protocolError.Value()) : -1;
+        EmitLog("BLE control write failed; status=" + std::to_string(static_cast<int32_t>(result.Status())) +
+          " protocol_error=" + std::to_string(protocolErrorCode) +
+          " offset=" + std::to_string(offset) + " attempt=" + std::to_string(attempt));
+        auto securityStillSettling = result.Status() == Gatt::GattCommunicationStatus::ProtocolError &&
+          (protocolErrorCode == 0x05 || protocolErrorCode == 0x0c || protocolErrorCode == 0x0f);
+        if (!securityStillSettling || attempt == 4) break;
+        co_await winrt::resume_after(std::chrono::milliseconds(500));
+        if (writeGeneration != m_connectionGeneration.load(std::memory_order_acquire)) {
+          promise.Reject("BLE disconnected while waiting to retry the control write");
+          co_return;
+        }
       }
-      if (result.Status() != Gatt::GattCommunicationStatus::Success) {
-        EmitLog("BLE control write failed; status=" + std::to_string(static_cast<int32_t>(result.Status())));
+      if (!written) {
         promise.Reject("BLE control write failed");
         co_return;
       }
     }
+    EmitLog("BLE control write completed; bytes=" + std::to_string(frame.size()));
     promise.Resolve();
   } catch (winrt::hresult_error const &error) {
     EmitLog("BLE control write failed: " + winrt::to_string(error.message()));
