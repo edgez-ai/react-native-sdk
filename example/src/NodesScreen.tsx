@@ -2,7 +2,7 @@ import React, {useMemo, useState} from 'react';
 import {ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View} from 'react-native';
 import {
   edgezNodeDisplayName, edgezNodeId,
-  isEdgezPublicChannel, type EdgezMeshNode, type EdgezMeshState,
+  isEdgezPublicChannel, isMeshUsable, type EdgezMeshNode, type EdgezMeshState,
 } from '@edgez/react-native-sdk';
 import {
   frequencyForChannel, halowFrequenciesKhz, halowFrequencyLabel,
@@ -46,11 +46,12 @@ export function NodesScreen(props: Props) {
   if (showRoutes) return <RoutesScreen state={props.state} onBack={() => setShowRoutes(false)} />;
 
   const frequencies = halowFrequenciesKhz(props.meshCountry, props.meshBandwidthMhz);
+  const canChangeChannel = isMeshUsable(props.state.status);
   return <ScrollView style={ui.screen} contentContainerStyle={ui.content}>
     <View style={styles.titleRow}><Text style={ui.heading}>Nodes</Text><Button label="Routes" secondary onPress={() => setShowRoutes(true)} /></View>
     <Text style={ui.muted}>Interface: {props.state.connection.toUpperCase()} · {discovered.length} discovered</Text>
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.frequencyRow}>
-      {frequencies.map(value => <TouchableOpacity key={value} disabled={!props.state.bleReady} style={[styles.frequency, value === props.meshFrequencyKhz && styles.frequencyActive, !props.state.bleReady && styles.disabled]} onPress={() => run(() => props.onMeshFrequencyChanged(value))}>
+      {frequencies.map(value => <TouchableOpacity key={value} disabled={!canChangeChannel} style={[styles.frequency, value === props.meshFrequencyKhz && styles.frequencyActive, !canChangeChannel && styles.disabled]} onPress={() => run(() => props.onMeshFrequencyChanged(value))}>
         <Text style={styles.frequencyText}>{halowFrequencyLabel(props.meshCountry, value)}</Text>
       </TouchableOpacity>)}
     </ScrollView>

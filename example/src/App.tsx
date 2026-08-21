@@ -22,6 +22,7 @@ export default function App() {
   const state = useEdgezMesh(session);
   const [tab, setTab] = useState<Tab>('Nodes');
   const [config, setConfig] = useState<EdgezMeshConfig>();
+  const [runtimeMeshFrequencyKhz, setRuntimeMeshFrequencyKhz] = useState(902500);
   const [selectedBleDevice, setSelectedBleDevice] = useState<EdgezBleDevice>();
   const [bleAutoConnect, setBleAutoConnect] = useState(false);
   const [selected, setSelected] = useState<bigint>();
@@ -31,12 +32,13 @@ export default function App() {
   useEffect(() => {
     void Promise.all([identityStore.getOrCreate(), bleStore.load()]).then(async ([identity, saved]) => {
       const initialConfig: EdgezMeshConfig = {
-        identity, countryCode: 'US', meshId: 'edgez', passphrase: 'edgez123',
-        maxHop: 4, meshBandwidthMhz: 1, meshFrequencyKhz: 902500,
+        identity, countryCode: saved.countryCode, meshId: 'edgez', passphrase: 'edgez123',
+        maxHop: 4, meshBandwidthMhz: saved.meshBandwidthMhz, meshFrequencyKhz: saved.meshFrequencyKhz,
         enabledPublicChannels: new Set(edgezPublicChannelPorts),
         beacon: {intervalSeconds: 10, marker: 'blue', shareLocation: false},
       };
       setConfig(initialConfig);
+      setRuntimeMeshFrequencyKhz(saved.meshFrequencyKhz);
       if (saved.deviceId) setSelectedBleDevice({id: saved.deviceId, name: saved.deviceName, rssi: 0, lastSeenMs: 0});
       setBleAutoConnect(saved.autoConnect);
       await session.initializeMesh(initialConfig);
@@ -50,6 +52,8 @@ export default function App() {
   const saveConfig = async () => {
     if (!config) return;
     await identityStore.save(config.identity);
+    await bleStore.setMeshRadio(config.countryCode ?? 'US', config.meshBandwidthMhz ?? 1, config.meshFrequencyKhz ?? 902500);
+    setRuntimeMeshFrequencyKhz(config.meshFrequencyKhz ?? 902500);
     await session.initializeMesh(config);
   };
   const regenerateIdentity = async () => {
@@ -58,9 +62,8 @@ export default function App() {
   };
   const changeFrequency = async (meshFrequencyKhz: number) => {
     if (!config) return;
-    const next = {...config, meshFrequencyKhz};
-    setConfig(next);
-    await session.initializeMesh(next);
+    setRuntimeMeshFrequencyKhz(meshFrequencyKhz);
+    await session.initializeMesh({...config, meshFrequencyKhz});
   };
   const togglePublicChannel = async (port: bigint, enabled: boolean) => {
     setConfig(current => {
@@ -89,7 +92,7 @@ export default function App() {
   const content = tab === 'Nodes' ? <NodesScreen
     state={state} meshCountry={config?.countryCode ?? 'US'}
     meshBandwidthMhz={config?.meshBandwidthMhz ?? 1}
-    meshFrequencyKhz={config?.meshFrequencyKhz ?? 902500}
+    meshFrequencyKhz={runtimeMeshFrequencyKhz}
     onMeshFrequencyChanged={changeFrequency} onRemoveNode={node => session.removeNode(node)}
     onTogglePublicChannel={togglePublicChannel}
   /> : tab === 'Settings' ? <SettingsScreen state={state} session={session} config={config} selectedBleDevice={state.bleDevices.get(selectedBleDevice?.id ?? '') ?? selectedBleDevice} bleAutoConnect={bleAutoConnect} onSelectBleDevice={selectBleDevice} onConnectBleDevice={connectBleDevice} onBleAutoConnectChanged={changeBleAutoConnect} onConfigChanged={setConfig} onSaveConfig={saveConfig} onRegenerateIdentity={regenerateIdentity} />

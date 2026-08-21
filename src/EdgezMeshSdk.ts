@@ -266,7 +266,7 @@ export class EdgezMeshSdk {
     const id = idParts();
     const encrypted = this.encrypt(config, toNode, fromNode, utf8.encode(text));
     await this.sendPacket('Conversation message', {from: u64(fromNode), to: u64(toNode.nodeNum), operation: Operation.request, interface: Interface.halow,
-      msg: {messageIdHigh: u64(id.high), messageIdLow: u64(id.low), sequence: 1, mime: Mime.text, payload: encodeConversationPayload(encrypted.nonce, encrypted.ciphertext)}});
+      msg: {messageIdHigh: u64(id.high), messageIdLow: u64(id.low), sequence: 1, mime: Mime.text, payload: encodeConversationPayload(encrypted.nonce, encrypted.ciphertext)}}, 3000);
     return id.uuid;
   }
 
@@ -286,7 +286,7 @@ export class EdgezMeshSdk {
       const plaintext = encodeVoiceChunk(group, durationMs, total, index, codec, audio);
       const encrypted = this.encrypt(config, toNode, fromNode, plaintext);
       await this.sendPacket(`Voice chunk ${index + 1}/${total}`, {from: u64(fromNode), to: u64(toNode.nodeNum), operation: Operation.request, interface: Interface.halow,
-        msg: {messageIdHigh: u64(id.high), messageIdLow: u64(id.low), sequence: index + 1, mime: Mime.voice, payload: encodeConversationPayload(encrypted.nonce, encrypted.ciphertext)}});
+        msg: {messageIdHigh: u64(id.high), messageIdLow: u64(id.low), sequence: index + 1, mime: Mime.voice, payload: encodeConversationPayload(encrypted.nonce, encrypted.ciphertext)}}, 3000);
     }
     return id.uuid;
   }

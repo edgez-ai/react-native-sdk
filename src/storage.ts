@@ -52,8 +52,14 @@ export class EdgezIdentityStore {
   async save(identity: EdgezUserIdentity): Promise<void> { await AsyncStorage.setItem(IDENTITY_KEY, JSON.stringify({userUuid: identity.userUuid, name: identity.name, privateKey: encode64(identity.privateKey), publicKey: encode64(identity.publicKey)})); }
 }
 
-export interface EdgezBleConfiguration { deviceId: string; deviceName: string; autoConnect: boolean; shareLocation: boolean; }
-const defaultBle: EdgezBleConfiguration = {deviceId: '', deviceName: '', autoConnect: false, shareLocation: false};
+export interface EdgezBleConfiguration {
+  deviceId: string; deviceName: string; autoConnect: boolean; shareLocation: boolean;
+  countryCode: string; meshBandwidthMhz: number; meshFrequencyKhz: number;
+}
+const defaultBle: EdgezBleConfiguration = {
+  deviceId: '', deviceName: '', autoConnect: false, shareLocation: false,
+  countryCode: 'US', meshBandwidthMhz: 1, meshFrequencyKhz: 902500,
+};
 
 export class EdgezBleConfigurationStore {
   async load(): Promise<EdgezBleConfiguration> { try { return {...defaultBle, ...JSON.parse(await AsyncStorage.getItem(BLE_KEY) ?? '{}')}; } catch { return defaultBle; } }
@@ -61,6 +67,9 @@ export class EdgezBleConfigurationStore {
   saveSelectedDevice(device: EdgezBleDevice): Promise<void> { return this.update({deviceId: device.id, deviceName: device.name}); }
   setAutoConnect(autoConnect: boolean): Promise<void> { return this.update({autoConnect}); }
   setShareLocation(shareLocation: boolean): Promise<void> { return this.update({shareLocation}); }
+  setMeshRadio(countryCode: string, meshBandwidthMhz: number, meshFrequencyKhz: number): Promise<void> {
+    return this.update({countryCode, meshBandwidthMhz, meshFrequencyKhz});
+  }
   clearSelectedDevice(): Promise<void> { return this.update({deviceId: '', deviceName: ''}); }
 }
 

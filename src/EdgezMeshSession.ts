@@ -59,6 +59,9 @@ export class EdgezMeshSession {
   private readonly onIncomingMessage?: EdgezMeshSessionOptions['onIncomingMessage'];
   private readonly onIncomingCall?: EdgezMeshSessionOptions['onIncomingCall'];
   private provisioning = false;
+  private initInFlight = false;
+  private initRetryRequested = false;
+  private lastInitKey?: string;
   private readonly pendingVoiceMessages = new Map<string, {durationMs: number; codec: number; chunks: Array<Uint8Array | undefined>}>();
 
   constructor(options: EdgezMeshSessionOptions = {}) {
@@ -91,7 +94,7 @@ export class EdgezMeshSession {
     catch (error) { this.setState({...this.current, bleConnecting: false, statusLine: `BLE connect failed: ${error}`}); throw error; }
   }
 
-  async disconnect(): Promise<void> { await this.sdk.disconnect(); this.setState({...initialState(), bleDevices: this.current.bleDevices, statusLine: 'BLE disconnected'}); }
+  async disconnect(): Promise<void> { await this.sdk.disconnect(); this.lastInitKey = undefined; this.setState({...initialState(), bleDevices: this.current.bleDevices, statusLine: 'BLE disconnected'}); }
   async initializeMesh(config: EdgezMeshConfig): Promise<void> {
     this.config = config;
     const enabled = config.enabledPublicChannels ?? new Set(edgezPublicChannelPorts);
@@ -148,14 +151,37 @@ export class EdgezMeshSession {
     if (!this.config) return;
     if (!this.current.bleReady && !force) { this.setStatus('Settings saved; waiting for BLE control service'); return; }
     if (!this.current.bleReady) { this.setStatus('Settings saved; connect BLE to initialize device'); return; }
-    await this.sdk.initializeMesh(this.config); this.setStatus('Device initialization sent; requesting status');
-    await this.sdk.requestDeviceSettings();
+    const initKey = this.meshInitKey(this.config);
+    if (!force && this.lastInitKey === initKey) return;
+    if (this.initInFlight) { this.initRetryRequested = true; return; }
+    this.initInFlight = true;
+    try {
+      await this.sdk.initializeMesh(this.config); this.lastInitKey = initKey; this.setStatus('Device initialization sent; requesting status');
+      await this.sdk.requestDeviceSettings();
+    } finally {
+      this.initInFlight = false;
+      if (this.initRetryRequested) {
+        this.initRetryRequested = false;
+        if (this.current.bleReady && this.current.connection !== 'none') void this.sendInitIfReady(true);
+      }
+    }
+  }
+
+  private meshInitKey(config: EdgezMeshConfig): string {
+    const beacon = config.beacon ?? {};
+    return JSON.stringify({
+      countryCode: config.countryCode ?? 'US', meshId: config.meshId ?? 'edgez', passphrase: config.passphrase ?? '',
+      maxHop: config.maxHop ?? 4, meshBandwidthMhz: config.meshBandwidthMhz ?? 0, meshFrequencyKhz: config.meshFrequencyKhz ?? 0,
+      identity: [config.identity.userIdHigh.toString(), config.identity.userIdLow.toString(), config.identity.name, Array.from(config.identity.publicKey)],
+      beacon, publicChannels: [...(config.enabledPublicChannels ?? edgezPublicChannelPorts)].map(String).sort(),
+    });
   }
 
   private async handleEvent(event: EdgezMeshEvent): Promise<void> {
     switch (event.type) {
       case 'connection': {
         const connection = event.connection ?? 'none';
+        if (connection === 'none') this.lastInitKey = undefined;
         this.setState({...this.current, connection, bleConnecting: false, bleReady: connection === 'none' ? false : this.current.bleReady, status: connection === 'none' ? undefined : this.current.status, statusLine: connection === 'ble' ? 'BLE link connected; setting up control channel' : 'BLE disconnected'}); break;
       }
       case 'bleDevice': if (event.bleDevice) { const devices = new Map(this.current.bleDevices); devices.set(event.bleDevice.id, event.bleDevice); this.setState({...this.current, bleDevices: devices, statusLine: `Found ${event.bleDevice.name || event.bleDevice.id}`}); } break;

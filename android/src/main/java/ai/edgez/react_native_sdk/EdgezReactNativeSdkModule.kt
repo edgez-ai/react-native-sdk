@@ -314,12 +314,27 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
 
     private fun queuePacket(arguments: ReadableMap, promise: Promise) {
         val packet = byteArray(arguments, "packet")
+        val waitForDrainMs = if (arguments.hasKey("waitForDrainMs")) arguments.getInt("waitForDrainMs").coerceAtLeast(0) else 0
         if (packet.isEmpty()) { promise.reject("missing_packet", "Missing EdgeZ packet"); return }
         if (packet.size > MAX_PAYLOAD) { promise.reject("packet_too_large", "EdgeZ packet exceeds $MAX_PAYLOAD bytes"); return }
         val frame = byteArrayOf('E'.code.toByte(), 'Z'.code.toByte(), packet.size.toByte(), (packet.size shr 8).toByte()) + packet
         synchronized(this) { writeQueue.add(frame) }
         val active = gatt; if (active == null || rx == null) { synchronized(this) { writeQueue.remove(frame) }; promise.reject("ble_not_ready", "BLE control channel is not ready"); return }
-        writeNext(active); promise.resolve(null)
+        writeNext(active)
+        if (waitForDrainMs <= 0) { promise.resolve(null); return }
+        thread(name = "edgez-rn-control-tx-drain") {
+            val deadline = System.currentTimeMillis() + waitForDrainMs
+            var drained = false
+            while (System.currentTimeMillis() < deadline) {
+                drained = synchronized(this@EdgezReactNativeSdkModule) { !writeInFlight && writeQueue.isEmpty() }
+                if (drained) break
+                Thread.sleep(10)
+            }
+            reactContext.runOnUiQueueThread {
+                if (drained) promise.resolve(null)
+                else promise.reject("ble_write_timeout", "BLE control TX did not drain after ${waitForDrainMs}ms")
+            }
+        }
     }
 
     @SuppressLint("MissingPermission")
