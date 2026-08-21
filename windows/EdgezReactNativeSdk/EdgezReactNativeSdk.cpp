@@ -190,19 +190,18 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       EmitLog("Windows reports an existing BLE pairing association");
     }
 
-    auto cacheMode = usedExistingAssociation
-      ? Bluetooth::BluetoothCacheMode::Cached
-      : Bluetooth::BluetoothCacheMode::Uncached;
-    EmitLog(usedExistingAssociation
-      ? "Discovering EdgeZ GATT service using the Windows cache"
-      : "Discovering EdgeZ GATT service without a stale Windows cache");
+    // Enumerating the complete service table is more compatible with Windows
+    // BLE drivers than the UUID-filtered GATT command. Cached mode still asks
+    // the device when the system-wide cache has been invalidated by unpairing.
+    auto cacheMode = Bluetooth::BluetoothCacheMode::Cached;
+    EmitLog("Enumerating the Windows GATT service table");
     Gatt::GattDeviceServicesResult services{nullptr};
+    Gatt::GattDeviceService service{nullptr};
     for (int attempt = 1; attempt <= 6; ++attempt) {
       winrt::hresult failureCode = S_OK;
       winrt::hstring failureMessage;
       try {
-        services = co_await device.GetGattServicesForUuidAsync(
-          ShortUuid(0xfff0), cacheMode);
+        services = co_await device.GetGattServicesAsync(cacheMode);
       } catch (winrt::hresult_error const &error) {
         failureCode = error.code();
         failureMessage = error.message();
@@ -217,25 +216,32 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
           L"Windows disconnected the BLE device during service discovery");
       }
 
-      if (failureCode >= 0 && services &&
-          services.Status() == Gatt::GattCommunicationStatus::Success &&
-          services.Services().Size() > 0) break;
+      service = nullptr;
+      if (failureCode >= 0 && services && services.Status() == Gatt::GattCommunicationStatus::Success) {
+        for (auto const &candidate : services.Services()) {
+          if (candidate.Uuid() == ShortUuid(0xfff0)) { service = candidate; break; }
+        }
+      }
+      if (service) break;
 
       if (attempt == 6) {
         if (failureCode < 0) throw winrt::hresult_error(failureCode, failureMessage);
         auto status = services ? static_cast<int32_t>(services.Status()) : -1;
+        auto count = services ? services.Services().Size() : 0;
         throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_NOT_READY),
-          winrt::to_hstring("EdgeZ BLE service discovery failed; status=" + std::to_string(status)));
+          winrt::to_hstring("EdgeZ BLE service FFF0 was not discovered; status=" + std::to_string(status) +
+            " services=" + std::to_string(count)));
       }
 
       auto detail = failureCode < 0
         ? winrt::to_string(failureMessage)
-        : "status=" + std::to_string(services ? static_cast<int32_t>(services.Status()) : -1);
+        : "status=" + std::to_string(services ? static_cast<int32_t>(services.Status()) : -1) +
+          " services=" + std::to_string(services ? services.Services().Size() : 0);
       EmitLog("BLE security/GATT not ready; retry=" + std::to_string(attempt) + " " + detail);
       co_await winrt::resume_after(std::chrono::milliseconds(500));
       if (!isCurrentConnection()) { promise.Reject("BLE disconnected during GATT retry"); co_return; }
     }
-    auto service = services.Services().GetAt(0);
+    if (service.Session()) service.Session().MaintainConnection(true);
     auto characteristics = co_await service.GetCharacteristicsAsync(cacheMode);
     if (!isCurrentConnection()) { promise.Reject("BLE disconnected during characteristic discovery"); co_return; }
     if (characteristics.Status() != Gatt::GattCommunicationStatus::Success) {
