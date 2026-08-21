@@ -24,5 +24,11 @@ await writeFile(
   "module.exports = require('./scripts/metro-config.cjs');\n",
 );
 
+await writeFile(
+  path.resolve('tsconfig.json'),
+  '{\n  "extends": "./tsconfig.edgez.json"\n}\n',
+);
+
 console.log(`Configured Bluetooth capability in ${manifestPath}`);
 console.log('Restored the shared Windows Metro configuration');
+console.log('Restored the EdgeZ Windows TypeScript configuration');
