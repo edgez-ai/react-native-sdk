@@ -92,10 +92,12 @@ private:
   React::ReactContext m_context;
   Windows::Devices::Bluetooth::Advertisement::BluetoothLEAdvertisementWatcher m_watcher{nullptr};
   Windows::Devices::Bluetooth::BluetoothLEDevice m_device{nullptr};
+  Windows::Devices::Bluetooth::BluetoothLEPreferredConnectionParametersRequest m_preferredConnectionRequest{nullptr};
   winrt::event_token m_connectionStatusToken{};
   bool m_hasConnectionStatusHandler{false};
   std::atomic_uint64_t m_connectionGeneration{0};
   Windows::Devices::Bluetooth::GenericAttributeProfile::GattDeviceService m_service{nullptr};
+  Windows::Devices::Bluetooth::GenericAttributeProfile::GattSession m_session{nullptr};
   Windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic m_rx{nullptr};
   Windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic m_ota{nullptr};
   std::vector<Windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic> m_notifications;

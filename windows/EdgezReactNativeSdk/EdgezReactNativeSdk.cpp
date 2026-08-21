@@ -7,6 +7,7 @@ namespace Bluetooth = Windows::Devices::Bluetooth;
 namespace Advertisement = Windows::Devices::Bluetooth::Advertisement;
 namespace Gatt = Windows::Devices::Bluetooth::GenericAttributeProfile;
 namespace Enumeration = Windows::Devices::Enumeration;
+namespace Metadata = Windows::Foundation::Metadata;
 namespace Streams = Windows::Storage::Streams;
 
 static constexpr size_t MaximumPacketLength = 512;
@@ -313,7 +314,26 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       co_await winrt::resume_after(std::chrono::milliseconds(500));
       if (!isCurrentConnection()) { promise.Reject("BLE disconnected during GATT retry"); co_return; }
     }
-    if (service.Session()) service.Session().MaintainConnection(true);
+    auto session = service.Session();
+    if (session) session.MaintainConnection(true);
+
+    Bluetooth::BluetoothLEPreferredConnectionParametersRequest preferredConnectionRequest{nullptr};
+    if (Metadata::ApiInformation::IsMethodPresent(
+          L"Windows.Devices.Bluetooth.BluetoothLEDevice",
+          L"RequestPreferredConnectionParameters")) {
+      try {
+        preferredConnectionRequest = device.RequestPreferredConnectionParameters(
+          Bluetooth::BluetoothLEPreferredConnectionParameters::Balanced());
+        auto parameters = device.GetConnectionParameters();
+        EmitLog("Windows BLE balanced connection requested; status=" +
+          std::to_string(static_cast<int32_t>(preferredConnectionRequest.Status())) +
+          " interval=" + std::to_string(parameters.ConnectionInterval()) +
+          " latency=" + std::to_string(parameters.ConnectionLatency()) +
+          " timeout=" + std::to_string(parameters.LinkTimeout()));
+      } catch (winrt::hresult_error const &error) {
+        EmitLog("Windows BLE balanced connection request unavailable: " + winrt::to_string(error.message()));
+      }
+    }
 
     // Windows has already restored the FFF2 CCCD by this point, which means
     // its system GATT cache contains characteristic objects. Read that local
@@ -374,6 +394,8 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     }
     if (!isCurrentConnection()) { promise.Reject("BLE disconnected before the control channel became ready"); co_return; }
     m_service = service;
+    m_session = session;
+    m_preferredConnectionRequest = preferredConnectionRequest;
     m_rx = rx;
     m_ota = ota;
     m_notifications = std::move(notifications);
@@ -458,6 +480,18 @@ void EdgezReactNativeSdk::Close(bool emitDisconnected) noexcept {
   m_notifications.clear();
   m_rx = nullptr;
   m_ota = nullptr;
+  try {
+    if (m_preferredConnectionRequest) m_preferredConnectionRequest.Close();
+    m_preferredConnectionRequest = nullptr;
+    if (m_session) {
+      m_session.MaintainConnection(false);
+      m_session.Close();
+    }
+    m_session = nullptr;
+  } catch (...) {
+    m_preferredConnectionRequest = nullptr;
+    m_session = nullptr;
+  }
   if (m_service) m_service.Close();
   m_service = nullptr;
   if (m_device && m_hasConnectionStatusHandler) m_device.ConnectionStatusChanged(m_connectionStatusToken);
