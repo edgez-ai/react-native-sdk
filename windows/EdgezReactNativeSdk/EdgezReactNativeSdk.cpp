@@ -236,7 +236,6 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     // and Windows restores an existing bond or presents its native PIN UI.
     auto pairing = device.DeviceInformation().Pairing();
     Gatt::GattSession associationSession{nullptr};
-    Bluetooth::BluetoothLEPreferredConnectionParametersRequest preferredConnectionRequest{nullptr};
     if (!pairing.IsPaired()) {
       EmitLog("No Windows BLE pairing association; authenticated FFF1 access will request the native PIN dialog");
     } else {
@@ -310,26 +309,6 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       EmitLog("Existing Windows BLE physical link connected; " + ConnectionParametersDescription(device));
     }
 
-    auto requestThroughputConnection = [&]() {
-      if (preferredConnectionRequest ||
-          !Metadata::ApiInformation::IsMethodPresent(
-            L"Windows.Devices.Bluetooth.BluetoothLEDevice",
-            L"RequestPreferredConnectionParameters")) return;
-      try {
-        preferredConnectionRequest = device.RequestPreferredConnectionParameters(
-          Bluetooth::BluetoothLEPreferredConnectionParameters::ThroughputOptimized());
-        EmitLog("Windows BLE throughput-optimized connection requested; status=" +
-          std::to_string(static_cast<int32_t>(preferredConnectionRequest.Status())) +
-          " " + ConnectionParametersDescription(device));
-      } catch (winrt::hresult_error const &error) {
-        EmitLog("Windows BLE throughput-optimized connection request unavailable: " + winrt::to_string(error.message()));
-      }
-    };
-    // Android requests CONNECTION_PRIORITY_HIGH as soon as its GATT link is
-    // connected and before service discovery. A retained association session
-    // lets Windows apply the equivalent preference to the reconnect itself.
-    if (associationSession) requestThroughputConnection();
-
     // Enumerating the complete service table is more compatible with Windows
     // BLE drivers than the UUID-filtered GATT command. An existing association
     // uses Uncached so this operation establishes and verifies a live encrypted
@@ -381,8 +360,29 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       co_await winrt::resume_after(std::chrono::milliseconds(500));
       if (!isCurrentConnection()) { promise.Reject("BLE disconnected during GATT retry"); co_return; }
     }
-    auto session = associationSession ? associationSession : service.Session();
-    if (session) session.MaintainConnection(true);
+    auto openStatus = co_await service.OpenAsync(Gatt::GattSharingMode::SharedReadAndWrite);
+    if (!isCurrentConnection()) {
+      promise.Reject("BLE disconnected while opening the EdgeZ GATT service");
+      co_return;
+    }
+    if (openStatus != Gatt::GattOpenStatus::Success &&
+        openStatus != Gatt::GattOpenStatus::AlreadyOpened) {
+      throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_NOT_READY),
+        winrt::to_hstring("Could not open EdgeZ GATT service; status=" +
+          std::to_string(static_cast<int32_t>(openStatus))));
+    }
+    EmitLog("EdgeZ GATT service opened SharedReadAndWrite; status=" +
+      std::to_string(static_cast<int32_t>(openStatus)));
+
+    auto session = service.Session();
+    if (!session) {
+      throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_NOT_READY),
+        L"The opened EdgeZ GATT service did not provide a session");
+    }
+    session.MaintainConnection(true);
+    EmitLog("Windows GATT session retained; can_maintain=" +
+      std::to_string(session.CanMaintainConnection() ? 1 : 0) +
+      " maintain=" + std::to_string(session.MaintainConnection() ? 1 : 0));
 
     if (session) {
       // Retain the session before registering its callback so every failure
@@ -397,10 +397,6 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
         });
       m_hasSessionStatusHandler = true;
     }
-
-    // The unpaired path has no association session before discovery. Request
-    // throughput now that service access has established its physical link.
-    requestThroughputConnection();
 
     if (Metadata::ApiInformation::IsEventPresent(
           L"Windows.Devices.Bluetooth.BluetoothLEDevice", L"ConnectionParametersChanged")) {
@@ -488,7 +484,6 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     if (!isCurrentConnection()) { promise.Reject("BLE disconnected before the control channel became ready"); co_return; }
     m_service = service;
     m_session = session;
-    m_preferredConnectionRequest = preferredConnectionRequest;
     m_rx = rx;
     m_ota = ota;
     m_notifications = std::move(notifications);
@@ -538,8 +533,6 @@ void EdgezReactNativeSdk::Close(bool emitDisconnected) noexcept {
   m_hasConnectionPhyHandler = false;
   m_connectionPhyToken = {};
   try {
-    if (m_preferredConnectionRequest) m_preferredConnectionRequest.Close();
-    m_preferredConnectionRequest = nullptr;
     if (m_session) {
       if (m_hasSessionStatusHandler) m_session.SessionStatusChanged(m_sessionStatusToken);
       m_hasSessionStatusHandler = false;
@@ -549,7 +542,6 @@ void EdgezReactNativeSdk::Close(bool emitDisconnected) noexcept {
     }
     m_session = nullptr;
   } catch (...) {
-    m_preferredConnectionRequest = nullptr;
     m_session = nullptr;
   }
   m_hasSessionStatusHandler = false;
