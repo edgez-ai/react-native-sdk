@@ -468,7 +468,10 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
         characteristic.ProtectionLevel(Gatt::GattProtectionLevel::EncryptionAndAuthenticationRequired);
         rx = characteristic;
       }
-      if (uuid == ShortUuid(0xfff2)) keepAliveCharacteristic = characteristic;
+      if (uuid == ShortUuid(0xfff2)) {
+        characteristic.ProtectionLevel(Gatt::GattProtectionLevel::EncryptionAndAuthenticationRequired);
+        keepAliveCharacteristic = characteristic;
+      }
       if (uuid == ShortUuid(0xfff5)) ota = characteristic;
       if (uuid == ShortUuid(0xfff2) || uuid == ShortUuid(0xfff4) || uuid == ShortUuid(0xfff6) || uuid == ShortUuid(0xfff8)) {
         characteristic.ValueChanged({this, &EdgezReactNativeSdk::HandleValue});
@@ -649,32 +652,43 @@ winrt::fire_and_forget EdgezReactNativeSdk::KeepGattSessionAliveAsync(
     uint64_t connectionGeneration,
     Gatt::GattCharacteristic characteristic) noexcept {
   constexpr auto interval = std::chrono::seconds(8);
-  EmitLog("Windows BLE idle keepalive started; interval=8s");
+  EmitLog("Windows BLE uncached link heartbeat started; interval=8s");
   while (connectionGeneration == m_connectionGeneration.load(std::memory_order_acquire)) {
     co_await winrt::resume_after(interval);
     if (connectionGeneration != m_connectionGeneration.load(std::memory_order_acquire)) co_return;
 
     if (!characteristic) co_return;
     try {
-      // A CCCD read is a standard, side-effect-free outbound GATT operation.
-      // Some Windows desktop adapters enter an idle state after roughly 15
-      // seconds without a client request even when GattSession.MaintainConnection
-      // is true and notifications are active. Keep the central servicing the
-      // link without sending an EdgeZ application command to the firmware.
-      auto result = co_await characteristic.ReadClientCharacteristicConfigurationDescriptorAsync();
+      // Reading a CCCD only consults Windows' local descriptor cache and does
+      // not prove that an ATT packet reached the peripheral. FFF2 exposes an
+      // authenticated counter so Uncached forces a real, side-effect-free
+      // round trip over the physical link.
+      auto result = co_await characteristic.ReadValueAsync(Bluetooth::BluetoothCacheMode::Uncached);
       if (connectionGeneration != m_connectionGeneration.load(std::memory_order_acquire)) co_return;
       if (result.Status() == Gatt::GattCommunicationStatus::Success) {
-        EmitLog("Windows BLE idle keepalive completed");
+        Streams::DataReader reader = Streams::DataReader::FromBuffer(result.Value());
+        std::vector<uint8_t> bytes(reader.UnconsumedBufferLength());
+        reader.ReadBytes(bytes);
+        if (bytes.size() >= sizeof(uint32_t)) {
+          uint32_t counter = static_cast<uint32_t>(bytes[0]) |
+            (static_cast<uint32_t>(bytes[1]) << 8) |
+            (static_cast<uint32_t>(bytes[2]) << 16) |
+            (static_cast<uint32_t>(bytes[3]) << 24);
+          EmitLog("Windows BLE uncached link heartbeat completed; counter=" + std::to_string(counter));
+        } else {
+          EmitLog("Windows BLE uncached link heartbeat returned an invalid value; bytes=" +
+            std::to_string(bytes.size()));
+        }
       } else {
-        EmitLog("Windows BLE idle keepalive failed; status=" +
+        EmitLog("Windows BLE uncached link heartbeat failed; status=" +
           std::to_string(static_cast<int32_t>(result.Status())));
       }
     } catch (winrt::hresult_error const &error) {
       if (connectionGeneration != m_connectionGeneration.load(std::memory_order_acquire)) co_return;
-      EmitLog("Windows BLE idle keepalive failed: " + winrt::to_string(error.message()));
+      EmitLog("Windows BLE uncached link heartbeat failed: " + winrt::to_string(error.message()));
     } catch (...) {
       if (connectionGeneration != m_connectionGeneration.load(std::memory_order_acquire)) co_return;
-      EmitLog("Windows BLE idle keepalive failed with an unexpected native error");
+      EmitLog("Windows BLE uncached link heartbeat failed with an unexpected native error");
     }
   }
 }
