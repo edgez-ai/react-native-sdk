@@ -1,6 +1,6 @@
 {
   "name": "@edgez/react-native-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "React Native SDK for EdgeZ HaLow mesh devices",
   "license": "Apache-2.0",
   "homepage": "https://github.com/edgez-ai/react-native-sdk#readme",
