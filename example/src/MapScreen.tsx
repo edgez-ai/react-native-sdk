@@ -50,7 +50,6 @@ export function MapScreen({nodes}: {nodes: EdgezMeshNode[]}) {
     <View style={styles.controls}>
       <MapButton label={perspective3d ? '3D' : '2D'} active={perspective3d} onPress={toggle3d} />
       <MapButton label={night ? 'Night' : 'Day'} active={night} onPress={toggleTheme} />
-      <MapButton label="Offline" onPress={() => map.current?.findDownloadableRegion()} />
     </View>
     {region ? <View style={styles.prompt}>
       <Text style={styles.promptTitle}>Download map: {region}?</Text>
