@@ -55,6 +55,7 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
     private val descriptorQueue = ArrayDeque<BluetoothGattDescriptor>()
     private val writeQueue = ArrayDeque<ByteArray>()
     private var writeInFlight = false
+    private var writeFailureGeneration = 0L
     private val receive = FrameAccumulator()
     private val forwardReceive = FrameAccumulator()
     private var pendingBle: Pair<ReadableMap, Promise>? = null
@@ -264,7 +265,10 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
 
     @SuppressLint("MissingPermission")
     private fun closeGatt() {
-        synchronized(this) { writeQueue.clear(); writeInFlight = false }
+        synchronized(this) {
+            if (writeInFlight || writeQueue.isNotEmpty()) writeFailureGeneration++
+            writeQueue.clear(); writeInFlight = false
+        }
         descriptorQueue.clear(); rx = null; tx = null; ota = null
         gatt?.disconnect(); gatt?.close(); gatt = null; EdgezBleForegroundService.stop(reactContext)
     }
@@ -295,7 +299,11 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
         @Deprecated("Deprecated in Java") override fun onCharacteristicChanged(active: BluetoothGatt, characteristic: BluetoothGattCharacteristic) { handleChanged(characteristic, characteristic.value ?: return) }
         override fun onCharacteristicWrite(active: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
             if (characteristic.uuid == OTA) { synchronized(otaLock) { otaWriteStatus = status; otaLock.notifyAll() }; return }
-            synchronized(this@EdgezReactNativeSdkModule) { writeInFlight = false; if (status == BluetoothGatt.GATT_SUCCESS) writeQueue.pollFirst() else writeQueue.clear() }
+            synchronized(this@EdgezReactNativeSdkModule) {
+                writeInFlight = false
+                if (status == BluetoothGatt.GATT_SUCCESS) writeQueue.pollFirst()
+                else { writeFailureGeneration++; writeQueue.clear() }
+            }
             writeNext(active)
         }
     }
@@ -318,7 +326,7 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
         if (packet.isEmpty()) { promise.reject("missing_packet", "Missing EdgeZ packet"); return }
         if (packet.size > MAX_PAYLOAD) { promise.reject("packet_too_large", "EdgeZ packet exceeds $MAX_PAYLOAD bytes"); return }
         val frame = byteArrayOf('E'.code.toByte(), 'Z'.code.toByte(), packet.size.toByte(), (packet.size shr 8).toByte()) + packet
-        synchronized(this) { writeQueue.add(frame) }
+        val failureGeneration = synchronized(this) { writeQueue.add(frame); writeFailureGeneration }
         val active = gatt; if (active == null || rx == null) { synchronized(this) { writeQueue.remove(frame) }; promise.reject("ble_not_ready", "BLE control channel is not ready"); return }
         writeNext(active)
         if (waitForDrainMs <= 0) { promise.resolve(null); return }
@@ -326,12 +334,18 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
             val deadline = System.currentTimeMillis() + waitForDrainMs
             var drained = false
             while (System.currentTimeMillis() < deadline) {
-                drained = synchronized(this@EdgezReactNativeSdkModule) { !writeInFlight && writeQueue.isEmpty() }
+                val state = synchronized(this@EdgezReactNativeSdkModule) {
+                    Pair(!writeInFlight && writeQueue.isEmpty(), writeFailureGeneration != failureGeneration)
+                }
+                if (state.second) break
+                drained = state.first
                 if (drained) break
                 Thread.sleep(10)
             }
+            val failed = synchronized(this@EdgezReactNativeSdkModule) { writeFailureGeneration != failureGeneration }
             reactContext.runOnUiQueueThread {
-                if (drained) promise.resolve(null)
+                if (failed) promise.reject("ble_write_failed", "BLE control TX failed or disconnected")
+                else if (drained) promise.resolve(null)
                 else promise.reject("ble_write_timeout", "BLE control TX did not drain after ${waitForDrainMs}ms")
             }
         }
@@ -341,10 +355,13 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
     private fun writeNext(active: BluetoothGatt) {
         val frame: ByteArray
         synchronized(this) { if (writeInFlight) return; frame = writeQueue.peekFirst() ?: return; writeInFlight = true }
-        val characteristic = rx ?: return
+        val characteristic = rx ?: run {
+            synchronized(this) { writeInFlight = false; writeFailureGeneration++; writeQueue.clear() }
+            return
+        }
         val started = if (Build.VERSION.SDK_INT >= 33) active.writeCharacteristic(characteristic, frame, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
         else { characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT; characteristic.value = frame; active.writeCharacteristic(characteristic) }
-        if (!started) synchronized(this) { writeInFlight = false; writeQueue.clear() }
+        if (!started) synchronized(this) { writeInFlight = false; writeFailureGeneration++; writeQueue.clear() }
     }
 
     @SuppressLint("MissingPermission")
