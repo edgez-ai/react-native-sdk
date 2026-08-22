@@ -288,6 +288,26 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       associationSession.MaintainConnection(true);
       m_session = associationSession;
       EmitLog("Existing Windows BLE GATT session retained; requesting a live connection");
+
+      // Android waits for STATE_CONNECTED before it requests high connection
+      // priority, negotiates the link, and starts service discovery. WinRT's
+      // MaintainConnection has no awaitable completion, so wait for the
+      // BluetoothLEDevice status instead of issuing GATT commands while its
+      // connection parameters are still all zero.
+      for (int attempt = 0;
+           attempt < 120 && device.ConnectionStatus() != Bluetooth::BluetoothConnectionStatus::Connected;
+           ++attempt) {
+        co_await winrt::resume_after(std::chrono::milliseconds(100));
+        if (!isCurrentConnection()) {
+          promise.Reject("BLE connection attempt was superseded");
+          co_return;
+        }
+      }
+      if (device.ConnectionStatus() != Bluetooth::BluetoothConnectionStatus::Connected) {
+        throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_TIMEOUT),
+          L"Windows did not establish the paired BLE link within 12 seconds");
+      }
+      EmitLog("Existing Windows BLE physical link connected; " + ConnectionParametersDescription(device));
     }
 
     auto requestThroughputConnection = [&]() {
