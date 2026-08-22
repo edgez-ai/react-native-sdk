@@ -11,14 +11,42 @@ android {
   namespace 'ai.edgez.react_native_sdk'
   compileSdkVersion rootProject.ext.has('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 35
   defaultConfig {
-    minSdkVersion rootProject.ext.has('minSdkVersion') ? rootProject.ext.minSdkVersion : 23
+    minSdkVersion 26
     targetSdkVersion rootProject.ext.has('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 35
+    consumerProguardFiles 'consumer-rules.pro'
+  }
+  compileOptions {
+    coreLibraryDesugaringEnabled true
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+  kotlinOptions {
+    jvmTarget = '17'
   }
 }
 
-repositories { google(); mavenCentral() }
+repositories {
+  google()
+  mavenCentral()
+  ivy {
+    url 'https://github.com/edgez-ai/organicmaps/releases/download/v0.0.5'
+    patternLayout { artifact '[artifact]-[revision].[ext]' }
+    metadataSources { artifact() }
+    content { includeGroup 'ai.edgez.organicmaps' }
+  }
+}
 dependencies {
   implementation 'com.facebook.react:react-android'
   implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
   implementation 'androidx.core:core-ktx:1.15.0'
+  implementation 'androidx.fragment:fragment:1.8.9'
+  implementation 'androidx.lifecycle:lifecycle-process:2.9.4'
+  implementation 'androidx.media:media:1.7.1'
+  implementation 'androidx.recyclerview:recyclerview:1.4.0'
+  implementation 'com.google.protobuf:protobuf-javalite:4.33.2'
+  implementation 'com.squareup.okhttp3:okhttp:5.3.2'
+  implementation 'ai.edgez.organicmaps:organicmaps-location-core:0.0.5@aar'
+  implementation 'ai.edgez.organicmaps:organicmaps-maps-world:0.0.5@aar'
+  implementation 'ai.edgez.organicmaps:organicmaps-sdk:0.0.5@aar'
+  coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
 }

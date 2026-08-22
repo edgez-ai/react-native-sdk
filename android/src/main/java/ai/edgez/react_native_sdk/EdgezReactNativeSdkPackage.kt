@@ -8,5 +8,6 @@ import com.facebook.react.uimanager.ViewManager
 class EdgezReactNativeSdkPackage : ReactPackage {
     override fun createNativeModules(context: ReactApplicationContext): List<NativeModule> =
         listOf(EdgezReactNativeSdkModule(context))
-    override fun createViewManagers(context: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()
+    override fun createViewManagers(context: ReactApplicationContext): List<ViewManager<*, *>> =
+        listOf(EdgezOrganicMapViewManager(context))
 }

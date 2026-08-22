@@ -6,11 +6,12 @@ import {
   isEdgezPublicChannel, type EdgezBleDevice, type EdgezMeshConfig, type EdgezMeshNode, useEdgezMesh,
 } from '@edgez/react-native-sdk';
 import {NodesScreen} from './NodesScreen';
+import {MapScreen} from './MapScreen';
 import {SettingsScreen} from './SettingsScreen';
 import {Button, Card, ui} from './ui';
 import {SafeAreaFrame} from './SafeAreaFrame';
 
-type Tab = 'Nodes' | 'Messages' | 'Settings';
+type Tab = 'Nodes' | 'Map' | 'Messages' | 'Settings';
 
 export default function App() {
   const sdk = useMemo(() => new EdgezMeshSdk(), []);
@@ -95,14 +96,15 @@ export default function App() {
     meshFrequencyKhz={runtimeMeshFrequencyKhz}
     onMeshFrequencyChanged={changeFrequency} onRemoveNode={node => session.removeNode(node)}
     onTogglePublicChannel={togglePublicChannel}
-  /> : tab === 'Settings' ? <SettingsScreen state={state} session={session} config={config} selectedBleDevice={state.bleDevices.get(selectedBleDevice?.id ?? '') ?? selectedBleDevice} bleAutoConnect={bleAutoConnect} onSelectBleDevice={selectBleDevice} onConnectBleDevice={connectBleDevice} onBleAutoConnectChanged={changeBleAutoConnect} onConfigChanged={setConfig} onSaveConfig={saveConfig} onRegenerateIdentity={regenerateIdentity} />
+  /> : tab === 'Map' ? <MapScreen nodes={[...state.nodes.values()]} />
+    : tab === 'Settings' ? <SettingsScreen state={state} session={session} config={config} selectedBleDevice={state.bleDevices.get(selectedBleDevice?.id ?? '') ?? selectedBleDevice} bleAutoConnect={bleAutoConnect} onSelectBleDevice={selectBleDevice} onConnectBleDevice={connectBleDevice} onBleAutoConnectChanged={changeBleAutoConnect} onConfigChanged={setConfig} onSaveConfig={saveConfig} onRegenerateIdentity={regenerateIdentity} />
     : <MessagesScreen state={state} session={session} selected={selected} onSelected={setSelected} message={message} onMessage={setMessage} recording={recording} onRecording={setRecording} />;
 
   return <SafeAreaFrame style={styles.safe}>
     <StatusBar barStyle="light-content" />
     <View style={styles.header}><Text style={styles.title}>EdgeZ Mesh</Text><Text style={styles.status}>{state.statusLine}</Text></View>
     <View style={styles.content}>{content}</View>
-    <View style={styles.tabs}>{(['Nodes', 'Messages', 'Settings'] as Tab[]).map(item => <TouchableOpacity key={item} style={[styles.tab, tab === item && styles.tabActive]} onPress={() => setTab(item)}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></TouchableOpacity>)}</View>
+    <View style={styles.tabs}>{(['Nodes', 'Map', 'Messages', 'Settings'] as Tab[]).map(item => <TouchableOpacity key={item} style={[styles.tab, tab === item && styles.tabActive]} onPress={() => setTab(item)}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text></TouchableOpacity>)}</View>
   </SafeAreaFrame>;
 }
 
