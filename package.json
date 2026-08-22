@@ -20,7 +20,7 @@
   "module": "lib/module/index.js",
   "types": "lib/typescript/index.d.ts",
   "react-native": "src/index.ts",
-  "files": ["src", "lib", "android/build.gradle", "android/src", "macos", "windows", "protos", "EdgezReactNativeSdk.podspec", "NuGet.config", "react-native.config.js", "README.md", "CHANGELOG.md", "LICENSE"],
+  "files": ["src", "lib", "android/build.gradle", "android/consumer-rules.pro", "android/src", "macos", "windows", "protos", "EdgezReactNativeSdk.podspec", "NuGet.config", "react-native.config.js", "README.md", "CHANGELOG.md", "LICENSE"],
   "scripts": {
     "build": "bob build",
     "typecheck": "tsc --noEmit",

@@ -16,6 +16,6 @@ module.exports = {
         'android.permission.POST_NOTIFICATIONS',
       ],
     },
-    plugins: ['./plugins/withAndroidStudioNode'],
+    plugins: ['./plugins/withAndroidStudioNode', './plugins/withOrganicMaps'],
   },
 };

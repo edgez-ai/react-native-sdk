@@ -16,6 +16,8 @@ iOS is not yet implemented.
 - BLE firmware OTA with acknowledged writes, progress, and cancellation
 - Android BLE foreground service and message/call notification channels
 - best-known Android location lookup for shared beacons
+- native Organic Maps view with mesh-node markers, offline map downloads,
+  themes, 2D/3D perspective, and optional satellite tiles on Android
 - identity, BLE preference, and installed-driver persistence
 - stateful `EdgezMeshSession` and React `useEdgezMesh` hooks
 - an Expo SDK 57 development-client example
@@ -82,6 +84,46 @@ Applications that use another state architecture can construct `EdgezMeshSdk`
 directly. Tests can inject an `EdgezPlatformTransport` without Android or BLE
 hardware.
 
+## Organic Maps (Android)
+
+The Android SDK includes the same EdgeZ Organic Maps `0.0.5` engine used by the
+Flutter SDK. Android API 26 or newer is required. The package supplies its
+native dependencies and R8 rules; an Expo prebuild also needs the EdgeZ Ivy
+repository and Java core-library desugaring. The example's
+`withOrganicMaps` config plugin applies those settings automatically.
+
+```tsx
+import React, {useRef} from 'react';
+import {
+  EdgezOrganicMap,
+  type EdgezOrganicMapRef,
+} from '@edgez/react-native-sdk';
+
+export function MapScreen() {
+  const map = useRef<EdgezOrganicMapRef>(null);
+
+  return <EdgezOrganicMap
+    ref={map}
+    style={{flex: 1}}
+    nodes={[{
+      id: 'node-1',
+      label: 'Field sensor',
+      latitude: 59.3293,
+      longitude: 18.0686,
+      marker: 'blue',
+    }]}
+    zoom={9}
+    enableMapDownloads
+    onMapRegionAvailable={regionId => map.current?.downloadRegion(regionId)}
+    onMapError={console.warn}
+  />;
+}
+```
+
+The ref also supports camera reads/updates, day/night themes, 2D/3D
+perspective, remote XYZ satellite tiles, and a bundled MBTiles satellite
+asset. The component renders an availability message on non-Android platforms.
+
 ## Expo example
 
 The [`example`](example/) follows the managed Expo structure used by
@@ -96,7 +138,8 @@ npm run start     # later JavaScript-only iterations
 ```
 
 The example includes BLE connection, mesh status, encrypted text and recorded
-voice messages, notification permission, and OTA readiness. Its Flutter-aligned
+voice messages, notification permission, OTA readiness, and an Organic Maps tab
+with geolocated mesh-node markers and offline downloads. Its Flutter-aligned
 Nodes tab groups discovered devices by HaLow channel, manages the five public
 talkgroups, shows routes and node details, and exposes channel selection. The
 Settings tab includes user identity/location, country/bandwidth/channel setup,
