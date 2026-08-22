@@ -50,7 +50,16 @@ private const val MAP_VIEW_NAME = "EdgezOrganicMapView"
 internal class EdgezOrganicMapViewManager(
     private val applicationContext: ReactApplicationContext,
 ) : SimpleViewManager<EdgezOrganicMapView>() {
-    private val engine = EdgezOrganicMapsEngine(applicationContext)
+    // React Native can construct view managers on mqt_v_js. Organic Maps binds
+    // native thread checkers while its engine is constructed, so constructing it
+    // eagerly makes later UI-thread downloader calls abort in native code. The
+    // view instance itself is created on Android's main thread.
+    private val engine by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        check(Looper.myLooper() == Looper.getMainLooper()) {
+            "Organic Maps must be initialized on Android's main thread"
+        }
+        EdgezOrganicMapsEngine(applicationContext)
+    }
 
     override fun getName() = MAP_VIEW_NAME
 
@@ -114,7 +123,7 @@ internal class EdgezOrganicMapViewManager(
     override fun getExportedCustomDirectEventTypeConstants(): MutableMap<String, Any> =
         mutableMapOf(
             "topMapReady" to mapOf("registrationName" to "onMapReady"),
-            "topMapCameraChanged" to mapOf("registrationName" to "onCameraChanged"),
+            "topCameraChanged" to mapOf("registrationName" to "onCameraChanged"),
             "topMapRegionAvailable" to mapOf("registrationName" to "onMapRegionAvailable"),
             "topMapDownloadUpdate" to mapOf("registrationName" to "onMapDownloadUpdate"),
             "topMapError" to mapOf("registrationName" to "onMapError"),
@@ -429,9 +438,8 @@ internal class EdgezOrganicMapView(
             }
             false
         }
-        addView(mapView, 0, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         status.text = "Creating renderer…"
-        mapController = MapController(
+        val controller = MapController(
             mapView,
             engine.organicMaps.locationHelper,
             object : MapRenderingListener {
@@ -442,7 +450,12 @@ internal class EdgezOrganicMapView(
             { post { showError(IllegalStateException("Map rendering is not supported")) } },
             false,
         )
-        lifecycleOwner?.lifecycle?.addObserver(mapController!!)
+        mapController = controller
+        // Unlike a Flutter PlatformView, this React Native container is already
+        // attached when async Organic Maps initialization finishes. MapController
+        // must call Map.onCreate() before SurfaceView is attached to the hierarchy.
+        addView(mapView, 0, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        lifecycleOwner?.lifecycle?.addObserver(controller)
         startLocationIfReady()
     }
 
@@ -498,7 +511,6 @@ internal class EdgezOrganicMapView(
         } else nodes.firstOrNull()?.let { it.latitude to it.longitude }) ?: return
         moveCamera(target.first, target.second)
         initialCameraApplied = true
-        postDelayed({ if (!disposed && renderingReady) moveCamera(target.first, target.second) }, MAP_REFRESH_DELAY_MS)
     }
 
     private fun moveCameraIfExplicit() {
@@ -519,7 +531,7 @@ internal class EdgezOrganicMapView(
 
     private fun notifyCameraChanged() {
         if (!renderingReady) return
-        readCurrentCamera()?.let { emit("topMapCameraChanged", it) }
+        readCurrentCamera()?.let { emit("topCameraChanged", it) }
     }
 
     private fun readCurrentCamera(): Map<String, Any>? = runCatching {
@@ -700,7 +712,6 @@ internal class EdgezOrganicMapView(
     companion object {
         private const val REQUEST_MAP_LOCATION = 7310
         private const val PHONE_LOCATION_REFRESH_MS = 1_000L
-        private const val MAP_REFRESH_DELAY_MS = 250L
         private const val MIN_DOWNLOAD_PROMPT_ZOOM = 9
         private const val REGION_AUTOCACHE_INTERVAL_MS = 3_500L
         private const val REGION_AUTOCACHE_INITIAL_DELAY_MS = 5_000L

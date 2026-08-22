@@ -3,7 +3,6 @@ import {StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {
   EdgezOrganicMap,
   edgezNodeDisplayName,
-  type EdgezMapCamera,
   type EdgezMapDownloadUpdate,
   type EdgezMeshNode,
   type EdgezOrganicMapRef,
@@ -11,7 +10,6 @@ import {
 
 export function MapScreen({nodes}: {nodes: EdgezMeshNode[]}) {
   const map = useRef<EdgezOrganicMapRef>(null);
-  const [camera, setCamera] = useState<EdgezMapCamera>();
   const [region, setRegion] = useState<string>();
   const [download, setDownload] = useState<EdgezMapDownloadUpdate>();
   const [error, setError] = useState('');
@@ -42,12 +40,9 @@ export function MapScreen({nodes}: {nodes: EdgezMeshNode[]}) {
     <EdgezOrganicMap
       ref={map}
       nodes={markers}
-      centerLatitude={camera?.latitude}
-      centerLongitude={camera?.longitude}
-      zoom={camera?.zoom ?? 9}
+      zoom={9}
       enableMapDownloads
       style={StyleSheet.absoluteFill}
-      onCameraChanged={setCamera}
       onMapRegionAvailable={setRegion}
       onMapDownloadUpdate={update => {setRegion(undefined); setDownload(update);}}
       onMapError={setError}
