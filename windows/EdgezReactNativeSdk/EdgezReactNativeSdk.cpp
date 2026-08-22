@@ -460,6 +460,7 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     }
     Gatt::GattCharacteristic rx{nullptr};
     Gatt::GattCharacteristic ota{nullptr};
+    Gatt::GattCharacteristic keepAliveCharacteristic{nullptr};
     std::vector<Gatt::GattCharacteristic> notifications;
     for (auto const &characteristic : discoveredCharacteristics) {
       auto uuid = characteristic.Uuid();
@@ -467,6 +468,7 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
         characteristic.ProtectionLevel(Gatt::GattProtectionLevel::EncryptionAndAuthenticationRequired);
         rx = characteristic;
       }
+      if (uuid == ShortUuid(0xfff2)) keepAliveCharacteristic = characteristic;
       if (uuid == ShortUuid(0xfff5)) ota = characteristic;
       if (uuid == ShortUuid(0xfff2) || uuid == ShortUuid(0xfff4) || uuid == ShortUuid(0xfff6) || uuid == ShortUuid(0xfff8)) {
         characteristic.ValueChanged({this, &EdgezReactNativeSdk::HandleValue});
@@ -496,6 +498,7 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     });
     m_hasConnectionStatusHandler = true;
     EmitLog("BLE control channel ready");
+    KeepGattSessionAliveAsync(connectionGeneration, keepAliveCharacteristic);
     Emit({{"type", "connection"}, {"connection", "ble"}});
     Emit({{"type", "ready"}});
     promise.Resolve();
@@ -639,6 +642,40 @@ winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t>
   } catch (...) {
     EmitLog("BLE control write failed with an unexpected native error");
     promise.Reject("Unexpected Windows BLE control write error");
+  }
+}
+
+winrt::fire_and_forget EdgezReactNativeSdk::KeepGattSessionAliveAsync(
+    uint64_t connectionGeneration,
+    Gatt::GattCharacteristic characteristic) noexcept {
+  constexpr auto interval = std::chrono::seconds(8);
+  EmitLog("Windows BLE idle keepalive started; interval=8s");
+  while (connectionGeneration == m_connectionGeneration.load(std::memory_order_acquire)) {
+    co_await winrt::resume_after(interval);
+    if (connectionGeneration != m_connectionGeneration.load(std::memory_order_acquire)) co_return;
+
+    if (!characteristic) co_return;
+    try {
+      // A CCCD read is a standard, side-effect-free outbound GATT operation.
+      // Some Windows desktop adapters enter an idle state after roughly 15
+      // seconds without a client request even when GattSession.MaintainConnection
+      // is true and notifications are active. Keep the central servicing the
+      // link without sending an EdgeZ application command to the firmware.
+      auto result = co_await characteristic.ReadClientCharacteristicConfigurationDescriptorAsync();
+      if (connectionGeneration != m_connectionGeneration.load(std::memory_order_acquire)) co_return;
+      if (result.Status() == Gatt::GattCommunicationStatus::Success) {
+        EmitLog("Windows BLE idle keepalive completed");
+      } else {
+        EmitLog("Windows BLE idle keepalive failed; status=" +
+          std::to_string(static_cast<int32_t>(result.Status())));
+      }
+    } catch (winrt::hresult_error const &error) {
+      if (connectionGeneration != m_connectionGeneration.load(std::memory_order_acquire)) co_return;
+      EmitLog("Windows BLE idle keepalive failed: " + winrt::to_string(error.message()));
+    } catch (...) {
+      if (connectionGeneration != m_connectionGeneration.load(std::memory_order_acquire)) co_return;
+      EmitLog("Windows BLE idle keepalive failed with an unexpected native error");
+    }
   }
 }
 
