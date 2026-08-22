@@ -71,6 +71,64 @@ static Streams::IBuffer Buffer(std::vector<uint8_t> const &bytes) {
   return writer.DetachBuffer();
 }
 
+static Windows::Foundation::IAsyncOperation<Bluetooth::BluetoothLEDevice> OpenAssociatedDeviceAsync(
+    Microsoft::ReactNative::ReactDispatcher const &uiDispatcher,
+    winrt::hstring const &deviceId) {
+  if (!uiDispatcher) {
+    throw winrt::hresult_error(E_UNEXPECTED, L"Windows UI dispatcher is unavailable for BLE association access");
+  }
+
+  // Microsoft requires FromIdAsync to be initiated on the UI thread because
+  // Windows may need to prompt for device access. Keep the WinRT operation and
+  // its result alive while this coroutine resumes on the worker thread.
+  struct OpenState {
+    winrt::handle completed{CreateEvent(nullptr, true, false, nullptr)};
+    Windows::Foundation::IAsyncOperation<Bluetooth::BluetoothLEDevice> operation{nullptr};
+    Bluetooth::BluetoothLEDevice device{nullptr};
+    winrt::hresult error{S_OK};
+    winrt::hstring errorMessage;
+  };
+  auto state = std::make_shared<OpenState>();
+  if (!state->completed) {
+    throw winrt::hresult_error(HRESULT_FROM_WIN32(GetLastError()), L"Could not create BLE association wait handle");
+  }
+
+  uiDispatcher.Post([state, deviceId]() noexcept {
+    try {
+      state->operation = Bluetooth::BluetoothLEDevice::FromIdAsync(deviceId);
+      state->operation.Completed([state](auto const &operation, Windows::Foundation::AsyncStatus status) noexcept {
+        try {
+          if (status != Windows::Foundation::AsyncStatus::Completed) {
+            auto error = operation.ErrorCode();
+            if (!FAILED(error)) error = E_ABORT;
+            throw winrt::hresult_error(error, L"Windows could not open the paired BLE association");
+          }
+          state->device = operation.GetResults();
+        } catch (winrt::hresult_error const &error) {
+          state->error = error.code();
+          state->errorMessage = error.message();
+        } catch (...) {
+          state->error = E_FAIL;
+          state->errorMessage = L"Unexpected error opening the paired BLE association";
+        }
+        SetEvent(state->completed.get());
+      });
+    } catch (winrt::hresult_error const &error) {
+      state->error = error.code();
+      state->errorMessage = error.message();
+      SetEvent(state->completed.get());
+    } catch (...) {
+      state->error = E_FAIL;
+      state->errorMessage = L"Unexpected error starting paired BLE association access";
+      SetEvent(state->completed.get());
+    }
+  });
+
+  co_await winrt::resume_on_signal(state->completed.get());
+  if (FAILED(state->error)) throw winrt::hresult_error(state->error, state->errorMessage);
+  co_return state->device;
+}
+
 static std::string ConnectionParametersDescription(Bluetooth::BluetoothLEDevice const &device) {
   auto parameters = device.GetConnectionParameters();
   return "interval=" + std::to_string(parameters.ConnectionInterval()) +
@@ -177,6 +235,7 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     // GATT access is the source of truth: FFF1 requests authenticated security
     // and Windows restores an existing bond or presents its native PIN UI.
     auto pairing = device.DeviceInformation().Pairing();
+    Gatt::GattSession associationSession{nullptr};
     if (!pairing.IsPaired()) {
       EmitLog("No Windows BLE pairing association; authenticated FFF1 access will request the native PIN dialog");
     } else {
@@ -188,13 +247,58 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       // satisfy the authenticated FFF1 characteristic. Do not destroy a
       // working bond based on this metadata. The protected FFF1 write is the
       // authoritative security check and reuses the stored keys silently.
+
+      // Reopen paired devices by their Windows DeviceInformation ID. This is
+      // the association-backed GATT client path documented by Microsoft and
+      // ensures Windows loads the stored LE keys before the firmware starts
+      // its short bond-restore grace period. Opening only by MAC address can
+      // create a transient cache object that knows IsPaired but has not yet
+      // attached the persisted security context.
+      auto deviceId = device.DeviceInformation().Id();
+      EmitLog("Opening existing Windows BLE association by device ID");
+      auto associatedDevice = co_await OpenAssociatedDeviceAsync(m_context.UIDispatcher(), deviceId);
+      if (!isCurrentConnection()) {
+        if (associatedDevice) associatedDevice.Close();
+        promise.Reject("BLE connection attempt was superseded");
+        co_return;
+      }
+      if (!associatedDevice) {
+        throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_NOT_READY),
+          L"Windows could not reopen the paired BLE association");
+      }
+      device = associatedDevice;
+      m_device = device;
+      EmitLog("Existing Windows BLE association opened for authenticated GATT access");
+
+      // A cached GetGattServicesAsync call can complete before Windows has
+      // re-established the physical link. Create and retain the GATT session
+      // first; MaintainConnection is the Windows API that requests an actual
+      // connection independently of whether service metadata is cached.
+      associationSession = co_await Gatt::GattSession::FromDeviceIdAsync(device.BluetoothDeviceId());
+      if (!isCurrentConnection()) {
+        if (associationSession) associationSession.Close();
+        promise.Reject("BLE connection attempt was superseded");
+        co_return;
+      }
+      if (!associationSession) {
+        throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_NOT_READY),
+          L"Windows could not create a GATT session for the paired BLE device");
+      }
+      associationSession.MaintainConnection(true);
+      m_session = associationSession;
+      EmitLog("Existing Windows BLE GATT session retained; requesting a live connection");
     }
 
     // Enumerating the complete service table is more compatible with Windows
-    // BLE drivers than the UUID-filtered GATT command. Cached mode still asks
-    // the device when the system-wide cache has been invalidated by unpairing.
-    auto cacheMode = Bluetooth::BluetoothCacheMode::Cached;
-    EmitLog("Enumerating the Windows GATT service table");
+    // BLE drivers than the UUID-filtered GATT command. An existing association
+    // uses Uncached so this operation establishes and verifies a live encrypted
+    // link instead of returning metadata while ConnectionStatus is still false.
+    auto cacheMode = associationSession
+      ? Bluetooth::BluetoothCacheMode::Uncached
+      : Bluetooth::BluetoothCacheMode::Cached;
+    EmitLog(associationSession
+      ? "Connecting through the existing Windows BLE association and refreshing the GATT service table"
+      : "Enumerating the Windows GATT service table");
     Gatt::GattDeviceServicesResult services{nullptr};
     Gatt::GattDeviceService service{nullptr};
     for (int attempt = 1; attempt <= 6; ++attempt) {
@@ -211,11 +315,6 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
         promise.Reject("BLE disconnected during GATT service discovery");
         co_return;
       }
-      if (device.ConnectionStatus() == Bluetooth::BluetoothConnectionStatus::Disconnected) {
-        throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_DEVICE_NOT_CONNECTED),
-          L"Windows disconnected the BLE device during service discovery");
-      }
-
       service = nullptr;
       if (failureCode >= 0 && services && services.Status() == Gatt::GattCommunicationStatus::Success) {
         for (auto const &candidate : services.Services()) {
@@ -241,7 +340,7 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       co_await winrt::resume_after(std::chrono::milliseconds(500));
       if (!isCurrentConnection()) { promise.Reject("BLE disconnected during GATT retry"); co_return; }
     }
-    auto session = service.Session();
+    auto session = associationSession ? associationSession : service.Session();
     if (session) session.MaintainConnection(true);
 
     if (session) {
