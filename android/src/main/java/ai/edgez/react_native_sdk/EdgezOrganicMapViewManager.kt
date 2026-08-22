@@ -455,6 +455,19 @@ internal class EdgezOrganicMapView(
         // attached when async Organic Maps initialization finishes. MapController
         // must call Map.onCreate() before SurfaceView is attached to the hierarchy.
         addView(mapView, 0, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        // Fabric has already laid out this native container by the time Organic
+        // Maps finishes its asynchronous initialization. requestLayout() alone is
+        // suppressed, leaving the newly inserted SurfaceView at 0x0 and preventing
+        // surfaceCreated. Measure and position the child against the known parent.
+        post {
+            if (!disposed && mapView.parent === this && width > 0 && height > 0) {
+                mapView.measure(
+                    View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY),
+                )
+                mapView.layout(0, 0, width, height)
+            }
+        }
         lifecycleOwner?.lifecycle?.addObserver(controller)
         startLocationIfReady()
     }
