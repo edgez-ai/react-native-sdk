@@ -77,11 +77,9 @@ struct EdgezReactNativeSdk
 private:
   void Emit(React::JSValueObject &&event) noexcept;
   void EmitLog(std::string const &message) noexcept;
-  void QueuePacket(React::JSValueObject const &arguments, React::ReactPromise<void> const &promise,
-                   bool optimizeConnectionAfterWrite) noexcept;
+  void QueuePacket(React::JSValueObject const &arguments, React::ReactPromise<void> const &promise) noexcept;
   winrt::fire_and_forget ConnectAsync(uint64_t address, React::ReactPromise<void> promise) noexcept;
-  winrt::fire_and_forget WriteFrameAsync(std::vector<uint8_t> frame, React::ReactPromise<void> promise,
-                                         bool optimizeConnectionAfterWrite) noexcept;
+  winrt::fire_and_forget WriteFrameAsync(std::vector<uint8_t> frame, React::ReactPromise<void> promise) noexcept;
   void HandleValue(Windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic const &sender,
                    Windows::Devices::Bluetooth::GenericAttributeProfile::GattValueChangedEventArgs const &args) noexcept;
   void AppendFrame(std::vector<uint8_t> const &bytes, std::vector<uint8_t> &accumulator, std::string const &route) noexcept;

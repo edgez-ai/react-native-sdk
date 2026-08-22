@@ -236,6 +236,7 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
     // and Windows restores an existing bond or presents its native PIN UI.
     auto pairing = device.DeviceInformation().Pairing();
     Gatt::GattSession associationSession{nullptr};
+    Bluetooth::BluetoothLEPreferredConnectionParametersRequest preferredConnectionRequest{nullptr};
     if (!pairing.IsPaired()) {
       EmitLog("No Windows BLE pairing association; authenticated FFF1 access will request the native PIN dialog");
     } else {
@@ -288,6 +289,26 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       m_session = associationSession;
       EmitLog("Existing Windows BLE GATT session retained; requesting a live connection");
     }
+
+    auto requestThroughputConnection = [&]() {
+      if (preferredConnectionRequest ||
+          !Metadata::ApiInformation::IsMethodPresent(
+            L"Windows.Devices.Bluetooth.BluetoothLEDevice",
+            L"RequestPreferredConnectionParameters")) return;
+      try {
+        preferredConnectionRequest = device.RequestPreferredConnectionParameters(
+          Bluetooth::BluetoothLEPreferredConnectionParameters::ThroughputOptimized());
+        EmitLog("Windows BLE throughput-optimized connection requested; status=" +
+          std::to_string(static_cast<int32_t>(preferredConnectionRequest.Status())) +
+          " " + ConnectionParametersDescription(device));
+      } catch (winrt::hresult_error const &error) {
+        EmitLog("Windows BLE throughput-optimized connection request unavailable: " + winrt::to_string(error.message()));
+      }
+    };
+    // Android requests CONNECTION_PRIORITY_HIGH as soon as its GATT link is
+    // connected and before service discovery. A retained association session
+    // lets Windows apply the equivalent preference to the reconnect itself.
+    if (associationSession) requestThroughputConnection();
 
     // Enumerating the complete service table is more compatible with Windows
     // BLE drivers than the UUID-filtered GATT command. An existing association
@@ -357,20 +378,9 @@ winrt::fire_and_forget EdgezReactNativeSdk::ConnectAsync(
       m_hasSessionStatusHandler = true;
     }
 
-    Bluetooth::BluetoothLEPreferredConnectionParametersRequest preferredConnectionRequest{nullptr};
-    if (Metadata::ApiInformation::IsMethodPresent(
-          L"Windows.Devices.Bluetooth.BluetoothLEDevice",
-          L"RequestPreferredConnectionParameters")) {
-      try {
-        preferredConnectionRequest = device.RequestPreferredConnectionParameters(
-          Bluetooth::BluetoothLEPreferredConnectionParameters::Balanced());
-        EmitLog("Windows BLE balanced connection requested; status=" +
-          std::to_string(static_cast<int32_t>(preferredConnectionRequest.Status())) +
-          " " + ConnectionParametersDescription(device));
-      } catch (winrt::hresult_error const &error) {
-        EmitLog("Windows BLE balanced connection request unavailable: " + winrt::to_string(error.message()));
-      }
-    }
+    // The unpaired path has no association session before discovery. Request
+    // throughput now that service access has established its physical link.
+    requestThroughputConnection();
 
     if (Metadata::ApiInformation::IsEventPresent(
           L"Windows.Devices.Bluetooth.BluetoothLEDevice", L"ConnectionParametersChanged")) {
@@ -536,14 +546,13 @@ void EdgezReactNativeSdk::Close(bool emitDisconnected) noexcept {
 }
 
 void EdgezReactNativeSdk::InitializeMesh(React::JSValueObject &&arguments, React::ReactPromise<void> &&promise) noexcept {
-  QueuePacket(arguments, promise, true);
+  QueuePacket(arguments, promise);
 }
 void EdgezReactNativeSdk::SendPacket(React::JSValueObject &&arguments, React::ReactPromise<void> &&promise) noexcept {
-  QueuePacket(arguments, promise, false);
+  QueuePacket(arguments, promise);
 }
 
-void EdgezReactNativeSdk::QueuePacket(React::JSValueObject const &arguments, React::ReactPromise<void> const &promise,
-                                     bool optimizeConnectionAfterWrite) noexcept {
+void EdgezReactNativeSdk::QueuePacket(React::JSValueObject const &arguments, React::ReactPromise<void> const &promise) noexcept {
   auto found = arguments.find("packet");
   if (found == arguments.end()) { promise.Reject("Missing EdgeZ packet"); return; }
   auto const &packet = found->second.AsArray();
@@ -553,11 +562,10 @@ void EdgezReactNativeSdk::QueuePacket(React::JSValueObject const &arguments, Rea
   std::vector<uint8_t> frame{'E', 'Z', static_cast<uint8_t>(packet.size() & 0xff), static_cast<uint8_t>((packet.size() >> 8) & 0xff)};
   frame.reserve(packet.size() + 4);
   for (auto const &value : packet) frame.push_back(static_cast<uint8_t>(value.AsDouble()));
-  WriteFrameAsync(std::move(frame), promise, optimizeConnectionAfterWrite);
+  WriteFrameAsync(std::move(frame), promise);
 }
 
-winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t> frame, React::ReactPromise<void> promise,
-                                                            bool optimizeConnectionAfterWrite) noexcept {
+winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t> frame, React::ReactPromise<void> promise) noexcept {
   auto writeGeneration = m_connectionGeneration.load(std::memory_order_acquire);
   auto rx = m_rx;
   auto service = m_service;
@@ -612,22 +620,6 @@ winrt::fire_and_forget EdgezReactNativeSdk::WriteFrameAsync(std::vector<uint8_t>
       }
     }
     EmitLog("BLE control write completed; bytes=" + std::to_string(frame.size()));
-    if (optimizeConnectionAfterWrite &&
-        writeGeneration == m_connectionGeneration.load(std::memory_order_acquire) &&
-        Metadata::ApiInformation::IsMethodPresent(
-          L"Windows.Devices.Bluetooth.BluetoothLEDevice", L"RequestPreferredConnectionParameters")) {
-      try {
-        auto powerRequest = m_device.RequestPreferredConnectionParameters(
-          Bluetooth::BluetoothLEPreferredConnectionParameters::PowerOptimized());
-        if (m_preferredConnectionRequest) m_preferredConnectionRequest.Close();
-        m_preferredConnectionRequest = powerRequest;
-        EmitLog("Windows BLE power-optimized connection requested after mesh initialization; status=" +
-          std::to_string(static_cast<int32_t>(powerRequest.Status())) +
-          " " + ConnectionParametersDescription(m_device));
-      } catch (winrt::hresult_error const &error) {
-        EmitLog("Windows BLE power-optimized connection request unavailable: " + winrt::to_string(error.message()));
-      }
-    }
     promise.Resolve();
   } catch (winrt::hresult_error const &error) {
     EmitLog("BLE control write failed: " + winrt::to_string(error.message()));
