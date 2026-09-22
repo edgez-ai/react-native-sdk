@@ -21,6 +21,12 @@ export interface EdgezMapNode {
   marker?: string;
 }
 
+export interface EdgezMapLine {
+  id: string;
+  points: {latitude: number; longitude: number}[];
+  color?: string;
+}
+
 export interface EdgezMapCamera {
   latitude: number;
   longitude: number;
@@ -56,6 +62,7 @@ export interface EdgezOrganicMapRef {
 
 export interface EdgezOrganicMapProps {
   nodes: EdgezMapNode[];
+  lines?: EdgezMapLine[];
   centerLatitude?: number;
   centerLongitude?: number;
   zoom?: number;
@@ -115,6 +122,7 @@ export const EdgezOrganicMap = forwardRef<EdgezOrganicMapRef, EdgezOrganicMapPro
     return <NativeMap
       ref={nativeRef}
       nodes={props.nodes}
+      lines={props.lines}
       centerLatitude={props.centerLatitude}
       centerLongitude={props.centerLongitude}
       zoom={props.zoom ?? 9}

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.2
+
+- Added native geofence lines to the Android Organic Maps view. Boundaries now
+  move with the map renderer while panning and zooming.
+
 ## 0.1.1
 
 - Added an Android Organic Maps view with mesh-node markers, offline map

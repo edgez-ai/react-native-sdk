@@ -112,6 +112,16 @@ export function MapScreen() {
       longitude: 18.0686,
       marker: 'blue',
     }]}
+    lines={[{
+      id: 'pasture-boundary',
+      points: [
+        {latitude: 59.3293, longitude: 18.0686},
+        {latitude: 59.3300, longitude: 18.0700},
+        {latitude: 59.3285, longitude: 18.0710},
+        {latitude: 59.3293, longitude: 18.0686},
+      ],
+      color: '#e88d29',
+    }]}
     zoom={9}
     enableMapDownloads
     onMapRegionAvailable={regionId => map.current?.downloadRegion(regionId)}
@@ -123,6 +133,8 @@ export function MapScreen() {
 The ref also supports camera reads/updates, day/night themes, 2D/3D
 perspective, remote XYZ satellite tiles, and a bundled MBTiles satellite
 asset. The component renders an availability message on non-Android platforms.
+Lines are drawn by the native map renderer. Repeat the first point at the end
+to close a geofence boundary.
 
 ## Expo example
 

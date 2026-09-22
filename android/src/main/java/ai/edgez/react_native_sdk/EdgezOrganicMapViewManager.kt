@@ -69,6 +69,9 @@ internal class EdgezOrganicMapViewManager(
     @ReactProp(name = "nodes")
     fun setNodes(view: EdgezOrganicMapView, value: ReadableArray?) = view.setNodes(value)
 
+    @ReactProp(name = "lines")
+    fun setLines(view: EdgezOrganicMapView, value: ReadableArray?) = view.setLines(value)
+
     @ReactProp(name = "centerLatitude", defaultDouble = Double.NaN)
     fun setCenterLatitude(view: EdgezOrganicMapView, value: Double) =
         view.setCenterLatitude(value.takeIf(Double::isFinite))
@@ -228,6 +231,12 @@ private data class EdgezNativeMapNode(
     val marker: String,
 )
 
+private data class EdgezNativeMapLine(
+    val id: String,
+    val points: List<Pair<Double, Double>>,
+    val color: Int,
+)
+
 internal class EdgezOrganicMapView(
     private val reactContext: ThemedReactContext,
     private val engine: EdgezOrganicMapsEngine,
@@ -245,6 +254,8 @@ internal class EdgezOrganicMapView(
     private var pendingRegionId: String? = null
     private var storageCallbackSlot: Int? = null
     private var nodes = emptyList<EdgezNativeMapNode>()
+    private var lines = emptyList<EdgezNativeMapLine>()
+    private var linesConfigured = false
     private var centerLatitude: Double? = null
     private var centerLongitude: Double? = null
     private var zoom = 9
@@ -290,6 +301,12 @@ internal class EdgezOrganicMapView(
         nodes = parseNodes(value)
         renderNodes()
         applyInitialCamera()
+    }
+
+    fun setLines(value: ReadableArray?) {
+        linesConfigured = value != null
+        lines = parseLines(value)
+        renderLines()
     }
 
     fun setCenterLatitude(value: Double?) {
@@ -379,6 +396,9 @@ internal class EdgezOrganicMapView(
 
     fun dispose() {
         if (disposed) return
+        if (linesConfigured) runCatching {
+            Framework.nativeSetEdgeZGeoFenceLines(doubleArrayOf(), intArrayOf(), intArrayOf(), emptyArray<String>())
+        }
         disposed = true
         removeCallbacks(locationPoll)
         removeCallbacks(regionCheck)
@@ -476,6 +496,7 @@ internal class EdgezOrganicMapView(
         if (renderingReady) return
         renderingReady = true
         renderNodes()
+        if (linesConfigured) renderLines()
         applyInitialCamera()
         subscribeToMapDownloads()
         if (enableMapDownloads) postDelayed(regionCheck, REGION_AUTOCACHE_INITIAL_DELAY_MS)
@@ -513,6 +534,18 @@ internal class EdgezOrganicMapView(
         controller.updateCompassOffset(0, 0)
         controller.view.postInvalidate()
         status.visibility = View.GONE
+    }
+
+    private fun renderLines() {
+        val controller = mapController ?: return
+        if (!controller.isRenderingActive()) return
+        Framework.nativeSetEdgeZGeoFenceLines(
+            lines.flatMap { line -> line.points.flatMap { listOf(it.first, it.second) } }.toDoubleArray(),
+            lines.map { it.points.size }.toIntArray(),
+            lines.map { it.color }.toIntArray(),
+            lines.map { it.id }.toTypedArray(),
+        )
+        controller.view.postInvalidate()
     }
 
     private fun applyInitialCamera() {
@@ -716,6 +749,24 @@ internal class EdgezOrganicMapView(
                 map.string("id"), map.string("label"), latitude, longitude,
                 map.string("marker").ifBlank { "blue" },
             )
+        }
+    }
+
+    private fun parseLines(value: ReadableArray?): List<EdgezNativeMapLine> {
+        if (value == null) return emptyList()
+        return (0 until value.size()).mapNotNull { index ->
+            val map = value.getMap(index) ?: return@mapNotNull null
+            val coordinates = map.getArray("points") ?: return@mapNotNull null
+            val points = (0 until coordinates.size()).mapNotNull point@{ pointIndex ->
+                val point = coordinates.getMap(pointIndex) ?: return@point null
+                val latitude = point.number("latitude") ?: return@point null
+                val longitude = point.number("longitude") ?: return@point null
+                if (latitude !in -90.0..90.0 || longitude !in -180.0..180.0) return@point null
+                latitude to longitude
+            }
+            if (points.size < 2) return@mapNotNull null
+            val color = runCatching { Color.parseColor(map.string("color")) }.getOrDefault(Color.rgb(232, 141, 41))
+            EdgezNativeMapLine(map.string("id"), points, color)
         }
     }
 

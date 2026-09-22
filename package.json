@@ -1,6 +1,6 @@
 {
   "name": "@edgez/react-native-sdk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "React Native SDK for EdgeZ HaLow mesh devices",
   "license": "Apache-2.0",
   "homepage": "https://github.com/edgez-ai/react-native-sdk#readme",
@@ -11,7 +11,14 @@
   "bugs": {
     "url": "https://github.com/edgez-ai/react-native-sdk/issues"
   },
-  "keywords": ["react-native", "bluetooth", "ble", "mesh", "halow", "iot"],
+  "keywords": [
+    "react-native",
+    "bluetooth",
+    "ble",
+    "mesh",
+    "halow",
+    "iot"
+  ],
   "publishConfig": {
     "access": "public"
   },
@@ -20,7 +27,22 @@
   "module": "lib/module/index.js",
   "types": "lib/typescript/index.d.ts",
   "react-native": "src/index.ts",
-  "files": ["src", "lib", "android/build.gradle", "android/consumer-rules.pro", "android/src", "macos", "windows", "protos", "EdgezReactNativeSdk.podspec", "NuGet.config", "react-native.config.js", "README.md", "CHANGELOG.md", "LICENSE"],
+  "files": [
+    "src",
+    "lib",
+    "android/build.gradle",
+    "android/consumer-rules.pro",
+    "android/src",
+    "macos",
+    "windows",
+    "protos",
+    "EdgezReactNativeSdk.podspec",
+    "NuGet.config",
+    "react-native.config.js",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "bob build",
     "typecheck": "tsc --noEmit",
@@ -58,11 +80,23 @@
   },
   "jest": {
     "preset": "react-native",
-    "testPathIgnorePatterns": ["/node_modules/", "/example/"]
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/example/"
+    ]
   },
   "react-native-builder-bob": {
     "source": "src",
     "output": "lib",
-    "targets": [["commonjs", {"esm": true}], "module", "typescript"]
+    "targets": [
+      [
+        "commonjs",
+        {
+          "esm": true
+        }
+      ],
+      "module",
+      "typescript"
+    ]
   }
 }
