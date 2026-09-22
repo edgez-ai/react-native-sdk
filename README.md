@@ -86,7 +86,7 @@ hardware.
 
 ## Organic Maps (Android)
 
-The Android SDK includes EdgeZ Organic Maps `0.0.7`. Android API 26 or newer is required. The package supplies its
+The Android SDK includes EdgeZ Organic Maps `0.0.8`. Android API 26 or newer is required. The package supplies its
 native dependencies and R8 rules; an Expo prebuild also needs the EdgeZ Ivy
 repository and Java core-library desugaring. The example's
 `withOrganicMaps` config plugin applies those settings automatically.
