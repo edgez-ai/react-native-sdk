@@ -13,12 +13,20 @@ import {
 
 const viewName = 'EdgezOrganicMapView';
 
+export const edgezMapIcons = [
+  'sheep', 'cow', 'goat', 'horse', 'dog', 'person', 'tractor', 'truck', 'car', 'drone',
+  'router', 'gateway', 'beacon', 'tracker', 'sensor', 'camera', 'gps', 'meter', 'pump',
+  'valve', 'switch', 'battery', 'alarm',
+] as const;
+export type EdgezMapIcon = (typeof edgezMapIcons)[number];
+
 export interface EdgezMapNode {
   id: string;
   label: string;
   latitude: number;
   longitude: number;
   marker?: string;
+  icon?: EdgezMapIcon;
 }
 
 export interface EdgezMapLine {

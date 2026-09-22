@@ -229,6 +229,7 @@ private data class EdgezNativeMapNode(
     val latitude: Double,
     val longitude: Double,
     val marker: String,
+    val icon: String,
 )
 
 private data class EdgezNativeMapLine(
@@ -721,7 +722,9 @@ internal class EdgezOrganicMapView(
             append("ll=").append(String.format(Locale.US, "%.7f,%.7f", node.latitude, node.longitude))
             append("&n=").append(Uri.encode(node.label))
             append("&id=").append(Uri.encode(node.id))
-            markerStyle(node.marker)?.let { append("&s=").append(Uri.encode(it)) }
+            val style = markerStyle(node.marker) ?: "placemark-blue"
+            val icon = markerIcon(node.icon)
+            append("&s=").append(Uri.encode(if (icon == null) style else "$style:$icon"))
         }
     }
 
@@ -738,6 +741,12 @@ internal class EdgezOrganicMapView(
         else -> null
     }
 
+    private fun markerIcon(icon: String): String? = icon.lowercase(Locale.US).takeIf {
+        it in setOf("sheep", "cow", "goat", "horse", "dog", "person", "tractor", "truck", "car", "drone",
+            "router", "gateway", "beacon", "tracker", "sensor", "camera", "gps", "meter", "pump",
+            "valve", "switch", "battery", "alarm")
+    }
+
     private fun parseNodes(value: ReadableArray?): List<EdgezNativeMapNode> {
         if (value == null) return emptyList()
         return (0 until value.size()).mapNotNull { index ->
@@ -748,6 +757,7 @@ internal class EdgezOrganicMapView(
             EdgezNativeMapNode(
                 map.string("id"), map.string("label"), latitude, longitude,
                 map.string("marker").ifBlank { "blue" },
+                map.string("icon"),
             )
         }
     }
