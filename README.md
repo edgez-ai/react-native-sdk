@@ -86,8 +86,7 @@ hardware.
 
 ## Organic Maps (Android)
 
-The Android SDK includes the EdgeZ Organic Maps `0.0.7` engine used by the
-Flutter SDK. Android API 26 or newer is required. The package supplies its
+The Android SDK includes EdgeZ Organic Maps `0.0.7`. Android API 26 or newer is required. The package supplies its
 native dependencies and R8 rules; an Expo prebuild also needs the EdgeZ Ivy
 repository and Java core-library desugaring. The example's
 `withOrganicMaps` config plugin applies those settings automatically.
@@ -107,7 +106,7 @@ export function MapScreen() {
     style={{flex: 1}}
     nodes={[{
       id: 'node-1',
-      label: 'Field sensor',
+      label: 'Sheep tag',
       latitude: 59.3293,
       longitude: 18.0686,
       marker: 'blue',
@@ -136,6 +135,8 @@ perspective, remote XYZ satellite tiles, and a bundled MBTiles satellite
 asset. The component renders an availability message on non-Android platforms.
 Lines are drawn by the native map renderer. Repeat the first point at the end
 to close a geofence boundary.
+Use `edgezMapIcons` for the supported icon names. `icon` and `marker` are
+independent, so the same icon can use any supported marker color.
 
 ## Expo example
 
