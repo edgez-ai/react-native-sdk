@@ -86,7 +86,7 @@ hardware.
 
 ## Organic Maps (Android)
 
-The Android SDK includes the EdgeZ Organic Maps `0.0.6` engine used by the
+The Android SDK includes the EdgeZ Organic Maps `0.0.7` engine used by the
 Flutter SDK. Android API 26 or newer is required. The package supplies its
 native dependencies and R8 rules; an Expo prebuild also needs the EdgeZ Ivy
 repository and Java core-library desugaring. The example's

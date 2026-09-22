@@ -29,7 +29,7 @@ repositories {
   google()
   mavenCentral()
   ivy {
-    url 'https://github.com/edgez-ai/organicmaps/releases/download/v0.0.6'
+    url 'https://github.com/edgez-ai/organicmaps/releases/download/v0.0.7'
     patternLayout { artifact '[artifact]-[revision].[ext]' }
     metadataSources { artifact() }
     content { includeGroup 'ai.edgez.organicmaps' }
@@ -45,8 +45,8 @@ dependencies {
   implementation 'androidx.recyclerview:recyclerview:1.4.0'
   implementation 'com.google.protobuf:protobuf-javalite:4.33.2'
   implementation 'com.squareup.okhttp3:okhttp:5.3.2'
-  implementation 'ai.edgez.organicmaps:organicmaps-location-core:0.0.6@aar'
-  implementation 'ai.edgez.organicmaps:organicmaps-maps-world:0.0.6@aar'
-  implementation 'ai.edgez.organicmaps:organicmaps-sdk:0.0.6@aar'
+  implementation 'ai.edgez.organicmaps:organicmaps-location-core:0.0.7@aar'
+  implementation 'ai.edgez.organicmaps:organicmaps-maps-world:0.0.7@aar'
+  implementation 'ai.edgez.organicmaps:organicmaps-sdk:0.0.7@aar'
   coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
 }
