@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.3
+
+- Added 23 named Organic Maps point icons for animals, people, vehicles, and IoT
+  devices. The selected marker color now tints the icon silhouette.
+
 ## 0.1.2
 
 - Added native geofence lines to the Android Organic Maps view. Boundaries now
