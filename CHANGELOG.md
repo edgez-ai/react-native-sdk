@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4
 
 - Added an Android system firmware picker, on-device firmware size/SHA-256
   inspection, typed USB device discovery, and a managed end-to-end ESP32,
