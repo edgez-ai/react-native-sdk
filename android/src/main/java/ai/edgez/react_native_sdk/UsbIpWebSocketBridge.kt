@@ -23,6 +23,7 @@ import kotlin.concurrent.thread
 
 internal class UsbIpWebSocketBridge(
     private val context: Context,
+    private val usbIpServer: UsbIpServer,
     private val eventListener: (state: String, message: String?) -> Unit,
 ) : Closeable {
     companion object {
@@ -105,6 +106,10 @@ internal class UsbIpWebSocketBridge(
             override fun onMessage(socket: WebSocket, text: String) {
                 runCatching {
                     val message = JSONObject(text)
+                    if (message.optString("type") == "device.control.request") {
+                        handleDeviceControl(socket, busId, message)
+                        return
+                    }
                     if (message.optString("type") == "flash.status" && message.optString("state") == "uploading") {
                         val credit = message.optLong("credit", 0)
                         if (credit > 0) synchronized(creditLock) {
@@ -210,6 +215,29 @@ internal class UsbIpWebSocketBridge(
 
     fun cancelFlash(jobId: String) {
         webSocket?.send(JSONObject(mapOf("type" to "flash.cancel", "jobId" to jobId)).toString())
+    }
+
+    private fun handleDeviceControl(socket: WebSocket, busId: String, request: JSONObject) {
+        val requestId = request.optString("requestId")
+        val action = request.optString("action")
+        thread(name = "edgez-usb-device-control", isDaemon = true) {
+            val error = runCatching {
+                require(requestId.isNotBlank()) { "Missing device control request ID" }
+                require(action in setOf("esp32.enter-bootloader", "esp32.run-app")) {
+                    "Unsupported device control action: $action"
+                }
+                usbIpServer.executeDeviceControl(busId, action)
+            }.exceptionOrNull()
+            val response = JSONObject().apply {
+                put("type", "device.control.result")
+                put("requestId", requestId)
+                put("success", error == null)
+                if (error != null) put("message", error.message ?: error.javaClass.simpleName)
+            }
+            if (!socket.send(response.toString()) && !closed.get()) {
+                eventListener("failed", "WebSocket rejected device control response")
+            }
+        }
     }
 
     private fun uploadFirmware(socket: WebSocket, input: InputStream, expectedSize: Long) {

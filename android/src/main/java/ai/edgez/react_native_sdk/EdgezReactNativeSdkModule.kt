@@ -159,7 +159,7 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
                 check(usbIpTunnel == null) { "USB flash tunnel is already running" }
                 val server = usbIpServer ?: UsbIpServer(reactContext, this::handleUsbEvent)
                     .also { it.start(); usbIpServer = it }
-                val tunnel = UsbIpWebSocketBridge(reactContext) { state, message ->
+                val tunnel = UsbIpWebSocketBridge(reactContext, server) { state, message ->
                     if (state != "message") usbIpTunnelState = state
                     emit(mapOf("type" to "usb", "usbTunnelState" to state, "usbTunnelMessage" to message))
                 }

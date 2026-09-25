@@ -78,6 +78,9 @@ final class UsbIpServer implements AutoCloseable {
     // cancellation is observed inside the bootloader reset/sync window.
     private static final int BULK_IN_POLL_TIMEOUT_MS = 50;
     private static final int SEGGER_VENDOR_ID = 0x1366;
+    private static final int CP210X_VENDOR_ID = 0x10c4;
+    private static final int CP210X_REQUEST_TYPE = 0x41;
+    private static final int CP210X_SET_MHS = 0x07;
     private static final int JLINK_TRACE_LIMIT = 200;
 
     interface EventListener {
@@ -209,6 +212,16 @@ final class UsbIpServer implements AutoCloseable {
             }
         }
         notifyUsbEvent("snapshot_end", null);
+    }
+
+    void executeDeviceControl(String requestedBusId, String action) throws IOException {
+        for (DeviceSession session : deviceSessions) {
+            if (session.sessionBusId.equals(requestedBusId)) {
+                session.executeDeviceControl(action);
+                return;
+            }
+        }
+        throw new IOException("USB device " + requestedBusId + " is not imported");
     }
 
     private void notifyUsbEvent(String action, UsbDevice device) {
@@ -384,7 +397,6 @@ final class UsbIpServer implements AutoCloseable {
         private final AtomicInteger completionCount = new AtomicInteger();
         private final AtomicInteger failureCount = new AtomicInteger();
         private final AtomicInteger unlinkCount = new AtomicInteger();
-
         DeviceSession(
                 LocalSocket socket,
                 DataInputStream input,
@@ -717,7 +729,7 @@ final class UsbIpServer implements AutoCloseable {
                     + " index=0x" + Integer.toHexString(index)
                     + " requested=" + boundedLength
                     + " result=" + result);
-            if (requestType == 0x41 && request == 0x07) {
+            if (isCp210xMhs(requestType, request)) {
                 Log.i(TAG, "USB/IP CP210x modem control pass-through value=0x"
                         + Integer.toHexString(value) + " index=" + index
                         + " result=" + result);
@@ -734,6 +746,83 @@ final class UsbIpServer implements AutoCloseable {
                     ST_OK,
                     result,
                     inputTransfer ? Arrays.copyOf(data, result) : new byte[0]);
+        }
+
+        private boolean isCp210xMhs(int requestType, int request) {
+            return device.getVendorId() == CP210X_VENDOR_ID
+                    && requestType == CP210X_REQUEST_TYPE
+                    && request == CP210X_SET_MHS;
+        }
+
+        private int setCp210xMhs(int value, int index) {
+            return connection.controlTransfer(
+                    CP210X_REQUEST_TYPE, CP210X_SET_MHS, value, index,
+                    new byte[0], 0, CONTROL_TRANSFER_TIMEOUT_MS);
+        }
+
+        private boolean sleepResetStep(long milliseconds) {
+            try {
+                Thread.sleep(milliseconds);
+                return true;
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+
+        void executeDeviceControl(String action) throws IOException {
+            if (device.getVendorId() != CP210X_VENDOR_ID) {
+                throw new IOException("ESP32 reset requires a CP210x USB bridge");
+            }
+            Future<Integer> result = transferQueues
+                    .computeIfAbsent(0, ignored -> Executors.newSingleThreadExecutor())
+                    .submit(() -> runDeviceControl(action));
+            try {
+                int status = result.get(5, TimeUnit.SECONDS);
+                if (status < 0) {
+                    throw new IOException("USB modem-control transfer failed");
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IOException("ESP32 reset was interrupted", interrupted);
+            } catch (Exception exception) {
+                result.cancel(true);
+                throw new IOException("ESP32 reset failed: " + exception.getMessage(), exception);
+            }
+        }
+
+        private int runDeviceControl(String action) {
+            if ("esp32.enter-bootloader".equals(action)) {
+                int[] prefix = {0x300, 0x303, 0x302};
+                for (int value : prefix) {
+                    int result = setCp210xMhs(value, 0);
+                    if (result < 0) return result;
+                }
+                if (!sleepResetStep(100)) return EIO;
+                int result = setCp210xMhs(0x301, 0);
+                if (result < 0) return result;
+                if (!sleepResetStep(100)) return EIO;
+                result = setCp210xMhs(0x300, 0);
+                if (result < 0) return result;
+                result = setCp210xMhs(0x100, 0);
+                if (result >= 0) {
+                    Log.i(TAG, "Server-requested ESP32 bootloader reset completed");
+                }
+                return result;
+            }
+            if ("esp32.run-app".equals(action)) {
+                int result = setCp210xMhs(0x302, 0);
+                if (result < 0) return result;
+                if (!sleepResetStep(100)) return EIO;
+                result = setCp210xMhs(0x300, 0);
+                if (result < 0) return result;
+                result = setCp210xMhs(0x100, 0);
+                if (result >= 0) {
+                    Log.i(TAG, "Server-requested ESP32 application reset completed");
+                }
+                return result;
+            }
+            throw new IllegalArgumentException("Unsupported device control action: " + action);
         }
 
         private boolean setConfiguration(int id) {
@@ -1093,4 +1182,3 @@ final class UsbIpServer implements AutoCloseable {
         }
     }
 }
-

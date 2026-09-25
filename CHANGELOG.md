@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.9
+
+- Handle explicit ESP32 reset commands from the flash runtime and execute each
+  timing-sensitive CP210x DTR/RTS sequence atomically through Android USB Host.
+  The runtime waits for the result before starting esptool, removing WebSocket
+  round-trip gaps between toggles while keeping the flash flow server-controlled.
+
 ## 0.1.8
 
 - Confirm managed USB tunnel readiness from the native server's persistent
