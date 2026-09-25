@@ -40,7 +40,7 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
       - name: Publish SDK to npm with provenance
-        if: github.ref == 'refs/heads/codex/map-point-icons' && startsWith(github.event.head_commit.message, 'release: publish')
+        if: github.ref == 'refs/heads/codex/map-point-icons' && startsWith(github.event.head_commit.message, 'release publish')
         run: |
           npm install --global npm@latest
           npm publish --access public --provenance
