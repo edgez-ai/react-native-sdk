@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
+import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -25,6 +26,7 @@ internal class UsbIpWebSocketBridge(
     private val eventListener: (state: String, message: String?) -> Unit,
 ) : Closeable {
     companion object {
+        private const val TAG = "EdgezReactNativeSdk"
         private const val MAX_QUEUED_BYTES = 4L * 1024L * 1024L
         private const val READ_BUFFER_BYTES = 64 * 1024
         private const val FRAME_HEADER_BYTES = 8
@@ -60,8 +62,9 @@ internal class UsbIpWebSocketBridge(
         eventListener("connecting", null)
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(socket: WebSocket, response: Response) {
+                Log.i(TAG, "USB flash WebSocket opened url=$url busid=$busId")
                 if (closed.get()) {
-                    socket.close(1000, "Tunnel stopped")
+                    socket.cancel()
                     return
                 }
                 socket.send(JSONObject(mapOf("type" to "hello", "role" to "mobile", "busId" to busId)).toString())
@@ -72,10 +75,12 @@ internal class UsbIpWebSocketBridge(
                     }
                 }.fold(
                     onSuccess = { local ->
+                        Log.i(TAG, "USB flash bridge connected to local socket @$socketName")
                         eventListener("connected", null)
                         pumpLocalToWebSocket(local, socket)
                     },
                     onFailure = { error ->
+                        Log.e(TAG, "USB flash bridge could not connect to local socket @$socketName", error)
                         eventListener("failed", error.message)
                         socket.close(1011, "USB/IP socket unavailable")
                     },
@@ -116,11 +121,13 @@ internal class UsbIpWebSocketBridge(
             }
 
             override fun onClosed(socket: WebSocket, code: Int, reason: String) {
+                Log.i(TAG, "USB flash WebSocket closed code=$code reason=$reason")
                 closeLocalSocket()
                 if (!closed.get()) eventListener("disconnected", "$code $reason".trim())
             }
 
             override fun onFailure(socket: WebSocket, error: Throwable, response: Response?) {
+                Log.e(TAG, "USB flash WebSocket failed http=${response?.code}", error)
                 closeLocalSocket()
                 if (!closed.get()) eventListener("failed", error.message)
             }
@@ -262,7 +269,10 @@ internal class UsbIpWebSocketBridge(
         if (!closed.compareAndSet(false, true)) return
         synchronized(creditLock) { creditLock.notifyAll() }
         closeLocalSocket()
-        webSocket?.close(1000, "Tunnel stopped")
+        // cancel() also terminates an HTTP upgrade that is still waiting for a
+        // cold organization runtime. close() only works after the WebSocket
+        // handshake has completed and can otherwise leave a zombie session.
+        webSocket?.cancel()
         webSocket = null
         client.dispatcher.executorService.shutdown()
         client.connectionPool.evictAll()

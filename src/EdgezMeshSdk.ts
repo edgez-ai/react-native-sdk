@@ -239,7 +239,7 @@ export class EdgezMeshSdk {
 
   async flashEsp32Firmware(options: EdgezManagedEsp32FlashOptions): Promise<EdgezUsbFlashResult> {
     const jobId = options.jobId ?? `esp32-${Date.now().toString(36)}`;
-    const connectTimeoutMs = options.connectTimeoutMs ?? 30_000;
+    const connectTimeoutMs = options.connectTimeoutMs ?? 120_000;
     const flashTimeoutMs = options.flashTimeoutMs ?? 10 * 60_000;
     const firmware = await this.inspectUsbFirmware(options.firmwareUri);
     let tunnelStarted = false;
@@ -292,7 +292,7 @@ export class EdgezMeshSdk {
       throw new Error('Firmware URL must be a versioned GitHub release asset');
     }
     if (!/^[a-fA-F0-9]{64}$/.test(options.sha256)) throw new Error('Firmware SHA-256 is invalid');
-    const connectTimeoutMs = options.connectTimeoutMs ?? 30_000;
+    const connectTimeoutMs = options.connectTimeoutMs ?? 120_000;
     const flashTimeoutMs = options.flashTimeoutMs ?? 10 * 60_000;
     let tunnelStarted = false;
     let unsubscribe = () => {};

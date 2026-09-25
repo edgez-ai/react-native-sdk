@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7
+
+- Allow up to two minutes for a cold organization USB runtime to complete its
+  WebSocket upgrade, cancel pending upgrades cleanly, and log the Android
+  WebSocket/local-socket lifecycle for diagnostics.
+
 ## 0.1.6
 
 - Omit stored cookies when exchanging an Appwrite JWT for a managed USB flash
