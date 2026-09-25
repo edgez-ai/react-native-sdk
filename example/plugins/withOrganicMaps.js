@@ -5,7 +5,7 @@ const {
 
 const ORGANIC_MAPS_REPOSITORY = `
     ivy {
-      url 'https://github.com/edgez-ai/organicmaps/releases/download/v0.0.5'
+      url 'https://github.com/edgez-ai/organicmaps/releases/download/v0.0.8'
       patternLayout { artifact '[artifact]-[revision].[ext]' }
       metadataSources { artifact() }
       content { includeGroup 'ai.edgez.organicmaps' }
@@ -14,7 +14,7 @@ const ORGANIC_MAPS_REPOSITORY = `
 module.exports = function withOrganicMaps(config) {
   config = withProjectBuildGradle(config, gradleConfig => {
     let contents = gradleConfig.modResults.contents;
-    if (!contents.includes('edgez-ai/organicmaps/releases/download/v0.0.5')) {
+    if (!contents.includes('edgez-ai/organicmaps/releases/download/v0.0.8')) {
       const anchor = "    maven { url 'https://www.jitpack.io' }";
       if (!contents.includes(anchor)) throw new Error('Cannot add the Organic Maps Ivy repository');
       contents = contents.replace(anchor, `${anchor}${ORGANIC_MAPS_REPOSITORY}`);

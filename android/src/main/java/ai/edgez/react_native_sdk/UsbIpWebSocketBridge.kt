@@ -60,7 +60,10 @@ internal class UsbIpWebSocketBridge(
         eventListener("connecting", null)
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(socket: WebSocket, response: Response) {
-                if (closed.get()) return socket.close(1000, "Tunnel stopped")
+                if (closed.get()) {
+                    socket.close(1000, "Tunnel stopped")
+                    return
+                }
                 socket.send(JSONObject(mapOf("type" to "hello", "role" to "mobile", "busId" to busId)).toString())
                 runCatching {
                     LocalSocket().also {
