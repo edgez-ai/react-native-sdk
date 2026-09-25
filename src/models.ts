@@ -310,8 +310,15 @@ export interface EdgezUsbFlashJob {
   sha256: string;
 }
 
+export interface EdgezUsbReleaseFlashJob {
+  jobId: string;
+  profile: string;
+  firmwareUrl: string;
+  sha256: string;
+}
+
 export type EdgezEsp32Chip = 'esp32' | 'esp32s3' | 'esp32c3';
-export type EdgezUsbFlashState = 'uploading' | 'verified' | 'flashing' | 'complete' | 'failed' | 'cancelled';
+export type EdgezUsbFlashState = 'downloading' | 'uploading' | 'verified' | 'flashing' | 'complete' | 'failed' | 'cancelled';
 
 export interface EdgezUsbFirmwareInfo {
   firmwareUri: string;
@@ -332,6 +339,19 @@ export interface EdgezUsbFlashStatus {
 export interface EdgezManagedEsp32FlashOptions extends EdgezManagedUsbFlashTunnelOptions {
   /** A full/merged flash image. The server writes this image at address 0x0. */
   firmwareUri: string;
+  chip: EdgezEsp32Chip;
+  jobId?: string;
+  connectTimeoutMs?: number;
+  flashTimeoutMs?: number;
+  keepTunnelOpen?: boolean;
+  onProgress?: (status: EdgezUsbFlashStatus) => void;
+}
+
+export interface EdgezManagedEsp32ReleaseFlashOptions extends EdgezManagedUsbFlashTunnelOptions {
+  /** A versioned GitHub release asset containing a full/merged flash image. */
+  firmwareUrl: string;
+  /** SHA-256 published in the GitHub release asset metadata. */
+  sha256: string;
   chip: EdgezEsp32Chip;
   jobId?: string;
   connectTimeoutMs?: number;

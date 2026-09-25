@@ -86,6 +86,18 @@ describe('EdgezMeshSdk packet API', () => {
     ]);
   });
 
+  it('starts a URL-based USB flash job without uploading firmware', async () => {
+    const transport = new FakeTransport();
+    const sdk = new EdgezMeshSdk({transport});
+    const job = {
+      jobId: 'release-1', profile: 'esp32s3',
+      firmwareUrl: 'https://github.com/edgez-ai/template/releases/download/v1.0.0/firmware.bin',
+      sha256: 'c'.repeat(64),
+    };
+    await sdk.flashUsbReleaseFirmware(job);
+    expect(transport.calls.at(-1)).toEqual({method: 'flashUsbReleaseFirmware', arguments_: job});
+  });
+
   it('parses authorized Android USB devices for selection', () => {
     expect(edgezUsbDevices({running: true, routePort: 3240, devices: [
       '1-2=CP2102 USB to UART [10c4:ea60] busid=1-2',
@@ -122,6 +134,39 @@ describe('EdgezMeshSdk packet API', () => {
       expect(transport.calls).toEqual(expect.arrayContaining([
         {method: 'flashUsbFirmware', arguments_: {jobId: 'esp32-test', profile: 'esp32s3', firmwareUri: 'content://firmware/merged.bin', size: 4096, sha256: 'b'.repeat(64)}},
         {method: 'stopUsbIpServer', arguments_: undefined},
+      ]));
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it('runs the managed ESP32 GitHub release flash flow through completion', async () => {
+    const transport = new FakeTransport();
+    const sdk = new EdgezMeshSdk({transport});
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({url: 'wss://appwrite.edgez.ai/v1/usb-runtimes/team-1', token: 'token-1'}),
+    }) as typeof fetch;
+    const invoke = transport.invoke.bind(transport);
+    transport.invoke = jest.fn(async <T,>(method: string, arguments_?: Record<string, unknown>) => {
+      const result = await invoke<T>(method, arguments_);
+      if (method === 'startUsbFlashTunnel') queueMicrotask(() => transport.emit({type: 'usb', usbTunnelState: 'connected'}));
+      if (method === 'flashUsbReleaseFirmware') queueMicrotask(() => {
+        transport.emit({type: 'usb', usbFlash: {type: 'flash.status', jobId: 'release-test', state: 'downloading'}});
+        transport.emit({type: 'usb', usbFlash: {type: 'flash.status', jobId: 'release-test', state: 'verified', size: 8192}});
+        transport.emit({type: 'usb', usbFlash: {type: 'flash.status', jobId: 'release-test', state: 'complete'}});
+      });
+      return result;
+    });
+    const firmwareUrl = 'https://github.com/edgez-ai/template/releases/download/v1.0.0/firmware.bin';
+    try {
+      await expect(sdk.flashEsp32ReleaseFirmware({
+        projectId: 'project-1', teamId: 'team-1', jwt: 'jwt-1', busId: '1-2', chip: 'esp32s3',
+        firmwareUrl, sha256: 'c'.repeat(64), jobId: 'release-test',
+      })).resolves.toMatchObject({jobId: 'release-test', size: 8192, sha256: 'c'.repeat(64), state: 'complete'});
+      expect(transport.calls).toEqual(expect.arrayContaining([
+        {method: 'flashUsbReleaseFirmware', arguments_: {jobId: 'release-test', profile: 'esp32s3', firmwareUrl, sha256: 'c'.repeat(64)}},
       ]));
     } finally {
       global.fetch = originalFetch;

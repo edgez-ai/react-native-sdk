@@ -184,6 +184,23 @@ internal class UsbIpWebSocketBridge(
         }
     }
 
+    fun startReleaseFlash(jobId: String, profile: String, firmwareUrl: String, sha256: String) {
+        require(jobId.matches(Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"))) { "Invalid flash job ID" }
+        require(profile.matches(Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"))) { "Invalid flash profile" }
+        require(firmwareUrl.matches(Regex("^https://github\\.com/[^/]+/[^/]+/releases/download/[^/]+/[^/]+$"))) {
+            "Firmware URL must be a versioned GitHub release asset"
+        }
+        require(sha256.matches(Regex("^[a-fA-F0-9]{64}$"))) { "Firmware SHA-256 is invalid" }
+        val socket = webSocket ?: error("USB flash tunnel is not running")
+        check(socket.send(JSONObject(mapOf(
+            "type" to "flash.start",
+            "jobId" to jobId,
+            "profile" to profile,
+            "firmwareUrl" to firmwareUrl,
+            "sha256" to sha256.lowercase(),
+        )).toString())) { "WebSocket rejected flash.start" }
+    }
+
     fun cancelFlash(jobId: String) {
         webSocket?.send(JSONObject(mapOf("type" to "flash.cancel", "jobId" to jobId)).toString())
     }

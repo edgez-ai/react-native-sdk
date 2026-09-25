@@ -131,6 +131,27 @@ not be used with this flow.
 waits for esptool to finish, and closes the USB export afterward. Pass a stable
 `jobId` if the UI needs a Cancel button, then call `cancelUsbFlash(jobId)`.
 
+For a versioned GitHub release, keep the firmware off the phone and let the
+runtime download it directly. Pass the SHA-256 published by GitHub's release
+asset metadata:
+
+```ts
+await sdk.flashEsp32ReleaseFirmware({
+  projectId: appwriteProjectId,
+  teamId: organizationId,
+  jwt: await account.createJWT().then(value => value.jwt),
+  busId: device.busId,
+  chip: 'esp32s3',
+  firmwareUrl: 'https://github.com/edgez-ai/example/releases/download/v1.0.0/firmware.bin',
+  sha256: '<GitHub release asset SHA-256>',
+  onProgress: status => console.log(status.state, status.message),
+});
+```
+
+This sends only the URL and digest over the control channel. The runtime
+downloads the image, enforces its size limit, verifies SHA-256, and then flashes
+it through the phone's USB/IP connection.
+
 The lower-level API remains available when an application needs to keep a
 tunnel open or manage several operations itself:
 

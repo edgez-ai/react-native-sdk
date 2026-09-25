@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5
+
+- Added managed ESP32 flashing from a versioned GitHub release URL. The mobile
+  client sends only the asset URL and GitHub-published SHA-256 to the runtime;
+  the runtime downloads and verifies the firmware before flashing.
+
 ## 0.1.4
 
 - Added an Android system firmware picker, on-device firmware size/SHA-256

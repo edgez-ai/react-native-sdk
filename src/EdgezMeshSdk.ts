@@ -20,6 +20,8 @@ import {
   type EdgezUsbFlashJob,
   type EdgezUsbFirmwareInfo,
   type EdgezUsbFlashStatus,
+  type EdgezUsbReleaseFlashJob,
+  type EdgezManagedEsp32ReleaseFlashOptions,
   type EdgezManagedEsp32FlashOptions,
   type EdgezUsbFlashResult,
   type EdgezVoiceChunk,
@@ -229,6 +231,7 @@ export class EdgezMeshSdk {
   }
   stopUsbFlashTunnel(): Promise<void> { return this.transport.invoke('stopUsbFlashTunnel'); }
   flashUsbFirmware(job: EdgezUsbFlashJob): Promise<void> { return this.transport.invoke('flashUsbFirmware', {...job}); }
+  flashUsbReleaseFirmware(job: EdgezUsbReleaseFlashJob): Promise<void> { return this.transport.invoke('flashUsbReleaseFirmware', {...job}); }
   cancelUsbFlash(jobId: string): Promise<void> { return this.transport.invoke('cancelUsbFlash', {jobId}); }
   inspectUsbFirmware(firmwareUri: string): Promise<EdgezUsbFirmwareInfo> { return this.transport.invoke('inspectUsbFirmware', {firmwareUri}); }
   pickUsbFirmware(): Promise<EdgezUsbFirmwareInfo | null> { return this.transport.invoke('pickUsbFirmware'); }
@@ -270,6 +273,59 @@ export class EdgezMeshSdk {
         await connected.promise;
         clearTimeout(connectTimer);
         await this.flashUsbFirmware({jobId, profile: options.chip, ...firmware});
+        flashTimer = setTimeout(() => finished.reject(new Error('Timed out waiting for ESP32 flashing to finish')), flashTimeoutMs);
+        return await finished.promise;
+      } finally {
+        if (connectTimer) clearTimeout(connectTimer);
+        if (flashTimer) clearTimeout(flashTimer);
+      }
+    } finally {
+      unsubscribe();
+      if (tunnelStarted && !options.keepTunnelOpen) await this.stopUsbIpServer().catch(() => undefined);
+    }
+  }
+
+  async flashEsp32ReleaseFirmware(options: EdgezManagedEsp32ReleaseFlashOptions): Promise<EdgezUsbFlashResult> {
+    const jobId = options.jobId ?? `esp32-${Date.now().toString(36)}`;
+    if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\/[^/]+\/[^/]+$/.test(options.firmwareUrl)) {
+      throw new Error('Firmware URL must be a versioned GitHub release asset');
+    }
+    if (!/^[a-fA-F0-9]{64}$/.test(options.sha256)) throw new Error('Firmware SHA-256 is invalid');
+    const connectTimeoutMs = options.connectTimeoutMs ?? 30_000;
+    const flashTimeoutMs = options.flashTimeoutMs ?? 10 * 60_000;
+    let tunnelStarted = false;
+    let unsubscribe = () => {};
+    let size = 0;
+    try {
+      const connected = deferred<void>();
+      const finished = deferred<EdgezUsbFlashResult>();
+      let connectTimer: ReturnType<typeof setTimeout> | undefined;
+      let flashTimer: ReturnType<typeof setTimeout> | undefined;
+      unsubscribe = this.subscribe(event => {
+        if (event.type !== 'usb') return;
+        if (event.usbTunnelState === 'connected') connected.resolve(undefined);
+        if (event.usbTunnelState === 'failed' || event.usbTunnelState === 'disconnected') {
+          const error = new Error(event.usbTunnelMessage || `USB flash tunnel ${event.usbTunnelState}`);
+          if (!connected.settled()) connected.reject(error);
+          else if (!finished.settled()) finished.reject(error);
+        }
+        const status = event.usbFlash;
+        if (!status || status.jobId !== jobId) return;
+        if (status.size) size = status.size;
+        if (status.state === 'complete') {
+          finished.resolve({jobId, chip: options.chip, size, sha256: options.sha256.toLowerCase(), state: 'complete'});
+        } else if (status.state === 'failed' || status.state === 'cancelled') {
+          finished.reject(new Error(status.message || `ESP32 flash ${status.state}`));
+        }
+        try { options.onProgress?.(status); } catch { /* UI callbacks cannot interrupt flashing. */ }
+      });
+      try {
+        await this.startManagedUsbFlashTunnel(options);
+        tunnelStarted = true;
+        connectTimer = setTimeout(() => connected.reject(new Error('Timed out connecting to the USB flash runtime')), connectTimeoutMs);
+        await connected.promise;
+        clearTimeout(connectTimer);
+        await this.flashUsbReleaseFirmware({jobId, profile: options.chip, firmwareUrl: options.firmwareUrl, sha256: options.sha256});
         flashTimer = setTimeout(() => finished.reject(new Error('Timed out waiting for ESP32 flashing to finish')), flashTimeoutMs);
         return await finished.promise;
       } finally {

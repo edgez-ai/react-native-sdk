@@ -196,6 +196,20 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
     }
 
     @ReactMethod
+    fun flashUsbReleaseFirmware(arguments: ReadableMap, promise: Promise) {
+        runCatching {
+            val tunnel = synchronized(usbIpLock) { usbIpTunnel }
+                ?: error("USB flash tunnel is not running")
+            tunnel.startReleaseFlash(
+                arguments.getString("jobId").orEmpty(),
+                arguments.getString("profile").orEmpty(),
+                arguments.getString("firmwareUrl").orEmpty(),
+                arguments.getString("sha256").orEmpty(),
+            )
+        }.fold({ promise.resolve(null) }, { promise.reject("usb_release_flash_start_failed", it.message, it) })
+    }
+
+    @ReactMethod
     fun cancelUsbFlash(arguments: ReadableMap, promise: Promise) {
         runCatching {
             val tunnel = synchronized(usbIpLock) { usbIpTunnel }
