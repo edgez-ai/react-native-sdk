@@ -55,6 +55,7 @@ describe('EdgezMeshSdk packet API', () => {
         'https://appwrite.edgez.ai/v1/teams/team-1/usb-flash/sessions',
         expect.objectContaining({
           method: 'POST',
+          credentials: 'omit',
           headers: expect.objectContaining({'X-Appwrite-Project': 'project-1', 'X-Appwrite-JWT': 'jwt-1'}),
         }),
       );

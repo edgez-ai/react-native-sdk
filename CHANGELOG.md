@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.6
+
+- Omit stored cookies when exchanging an Appwrite JWT for a managed USB flash
+  session, avoiding Appwrite 2.x's conflicting-authentication rejection.
+
 ## 0.1.5
 
 - Added managed ESP32 flashing from a versioned GitHub release URL. The mobile

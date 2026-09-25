@@ -213,6 +213,7 @@ export class EdgezMeshSdk {
     const endpoint = (options.endpoint ?? 'https://appwrite.edgez.ai/v1').replace(/\/$/, '');
     const response = await fetch(`${endpoint}/teams/${encodeURIComponent(options.teamId)}/usb-flash/sessions`, {
       method: 'POST',
+      credentials: 'omit',
       headers: {
         'Content-Type': 'application/json',
         'X-Appwrite-Project': options.projectId,
