@@ -93,6 +93,47 @@ the USB connection; a separate flash server runs esptool, SEGGER J-Link tools,
 or OpenOCD and reaches the SDK's abstract socket through the application's
 authenticated tunnel.
 
+For ESP32, the app can use the system document picker and the managed high-level
+flow. `pickUsbFirmware` calculates the size and SHA-256 on Android without
+loading the complete image into JavaScript. `discoverUsbDevices` starts USB
+Host mode, asks for Android USB permission, and returns selectable bus IDs.
+
+```ts
+const sdk = new EdgezMeshSdk();
+const firmware = await sdk.pickUsbFirmware();
+if (!firmware) return; // The user closed the picker.
+
+const [device] = await sdk.discoverUsbDevices();
+if (!device) throw new Error('Connect an ESP32 over USB-C');
+
+const result = await sdk.flashEsp32Firmware({
+  endpoint: 'https://appwrite.edgez.ai/v1',
+  projectId: appwriteProjectId,
+  teamId: organizationId,
+  jwt: await account.createJWT().then(value => value.jwt),
+  busId: device.busId,
+  chip: 'esp32s3', // also: esp32, esp32c3
+  firmwareUri: firmware.firmwareUri,
+  onProgress: status => {
+    const percent = status.size ? Math.round(100 * (status.received ?? 0) / status.size) : undefined;
+    console.log(status.state, percent, status.message);
+  },
+});
+console.log(`Flashed ${result.size} bytes`);
+```
+
+The built-in ESP32 profiles write one full/merged image at address `0x0`.
+Select a merged flash image produced for the exact chip and board. An ESP-IDF
+OTA application image such as `*-ota.bin` is not a full device image and must
+not be used with this flow.
+
+`flashEsp32Firmware` waits for the WebSocket, uploads and verifies the image,
+waits for esptool to finish, and closes the USB export afterward. Pass a stable
+`jobId` if the UI needs a Cancel button, then call `cancelUsbFlash(jobId)`.
+
+The lower-level API remains available when an application needs to keep a
+tunnel open or manage several operations itself:
+
 ```ts
 const sdk = new EdgezMeshSdk();
 const status = await sdk.startManagedUsbFlashTunnel({

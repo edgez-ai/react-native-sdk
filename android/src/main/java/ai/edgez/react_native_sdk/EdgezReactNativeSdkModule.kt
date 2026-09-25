@@ -2,10 +2,12 @@ package ai.edgez.react_native_sdk
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.NotificationManager
 import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.media.MediaRecorder
@@ -20,8 +22,11 @@ import com.facebook.react.modules.core.PermissionListener
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.io.File
+import java.io.FileInputStream
+import java.io.InputStream
 import java.util.ArrayDeque
 import java.util.UUID
+import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -37,12 +42,13 @@ private const val REQUEST_BLE = 7301
 private const val REQUEST_MIC = 7302
 private const val REQUEST_NOTIFICATION = 7303
 private const val REQUEST_LOCATION = 7304
+private const val REQUEST_USB_FIRMWARE = 7305
 private const val MAX_PAYLOAD = 512
 private const val VOICE_CODEC_AMR_NB = 1
 private const val VOICE_CODEC_OPUS = 2
 
 class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContext) :
-    ReactContextBaseJavaModule(reactContext), PermissionListener {
+    ReactContextBaseJavaModule(reactContext), PermissionListener, ActivityEventListener {
 
     private val adapter get() = reactContext.getSystemService(BluetoothManager::class.java)?.adapter
     private var scanCallback: ScanCallback? = null
@@ -77,6 +83,9 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
     private var usbIpTunnel: UsbIpWebSocketBridge? = null
     @Volatile private var usbIpTunnelState = "stopped"
     private var listenerCount = 0
+    private var pendingUsbFirmware: Promise? = null
+
+    init { reactContext.addActivityEventListener(this) }
 
     override fun getName() = "EdgezReactNativeSdk"
 
@@ -193,6 +202,83 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
                 ?: error("USB flash tunnel is not running")
             tunnel.cancelFlash(arguments.getString("jobId").orEmpty())
         }.fold({ promise.resolve(null) }, { promise.reject("usb_flash_cancel_failed", it.message, it) })
+    }
+
+    @ReactMethod
+    fun inspectUsbFirmware(arguments: ReadableMap, promise: Promise) {
+        val firmwareUri = arguments.getString("firmwareUri").orEmpty()
+        if (firmwareUri.isBlank()) { promise.reject("usb_firmware_invalid", "Firmware URI is required"); return }
+        resolveFirmwareInfo(firmwareUri, promise)
+    }
+
+    @ReactMethod
+    fun pickUsbFirmware(arguments: ReadableMap, promise: Promise) {
+        if (pendingUsbFirmware != null) { promise.reject("usb_firmware_picker_busy", "A firmware picker is already open"); return }
+        val activity = reactContext.currentActivity
+        if (activity == null) { promise.reject("activity_missing", "Firmware selection requires an activity"); return }
+        pendingUsbFirmware = promise
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/octet-stream"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/octet-stream", "application/x-binary", "*/*"))
+        }
+        runCatching { activity.startActivityForResult(intent, REQUEST_USB_FIRMWARE) }
+            .onFailure { error -> pendingUsbFirmware = null; promise.reject("usb_firmware_picker_failed", error.message, error) }
+    }
+
+    override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode != REQUEST_USB_FIRMWARE) return
+        val promise = pendingUsbFirmware ?: return
+        pendingUsbFirmware = null
+        if (resultCode != Activity.RESULT_OK || data?.data == null) { promise.resolve(null); return }
+        val uri = data.data!!
+        runCatching {
+            val flags = data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            if (flags != 0) reactContext.contentResolver.takePersistableUriPermission(uri, flags)
+        }
+        resolveFirmwareInfo(uri.toString(), promise)
+    }
+
+    override fun onNewIntent(intent: Intent) = Unit
+
+    private fun resolveFirmwareInfo(firmwareUri: String, promise: Promise) {
+        thread(name = "edgez-firmware-inspect") {
+            runCatching {
+                val digest = MessageDigest.getInstance("SHA-256")
+                var size = 0L
+                openFirmware(firmwareUri).use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        if (count == 0) continue
+                        digest.update(buffer, 0, count)
+                        size += count
+                    }
+                }
+                check(size > 0) { "Firmware image is empty" }
+                check(size <= 64L * 1024L * 1024L) { "Firmware image exceeds the 64 MiB runtime limit" }
+                Arguments.createMap().apply {
+                    putString("firmwareUri", firmwareUri)
+                    putDouble("size", size.toDouble())
+                    putString("sha256", digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) })
+                }
+            }.fold(
+                { result -> reactContext.runOnJSQueueThread { promise.resolve(result) } },
+                { error -> reactContext.runOnJSQueueThread { promise.reject("usb_firmware_inspect_failed", error.message, error) } },
+            )
+        }
+    }
+
+    private fun openFirmware(value: String): InputStream {
+        val uri = android.net.Uri.parse(value)
+        return when (uri.scheme?.lowercase()) {
+            "content", "android.resource" -> reactContext.contentResolver.openInputStream(uri)
+                ?: error("Unable to open firmware URI")
+            "file" -> FileInputStream(File(requireNotNull(uri.path) { "Firmware file URI has no path" }))
+            null, "" -> FileInputStream(File(value))
+            else -> error("Unsupported firmware URI scheme: ${uri.scheme}")
+        }
     }
 
     @ReactMethod
@@ -500,6 +586,9 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
     }
 
     override fun invalidate() {
+        pendingUsbFirmware?.reject("sdk_invalidated", "SDK was invalidated while selecting firmware")
+        pendingUsbFirmware = null
+        reactContext.removeActivityEventListener(this)
         stopScan(); discardVoiceRecording(); voicePlayer?.release(); voicePlayer = null; closeGatt()
         synchronized(usbIpLock) { usbIpTunnel.also { usbIpTunnel = null } }?.close()
         synchronized(usbIpLock) { usbIpServer.also { usbIpServer = null } }?.close()

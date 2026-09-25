@@ -1,6 +1,6 @@
 import {EdgezMeshSdk, type EdgezPlatformTransport} from '../src/EdgezMeshSdk';
 import {decodeNetworkPacket} from '../src/protocol';
-import type {EdgezMeshEvent, EdgezUserIdentity} from '../src/models';
+import {edgezUsbDevices, type EdgezMeshEvent, type EdgezUserIdentity} from '../src/models';
 import {EdgezMeshSession} from '../src/EdgezMeshSession';
 
 class FakeTransport implements EdgezPlatformTransport {
@@ -84,6 +84,48 @@ describe('EdgezMeshSdk packet API', () => {
       {method: 'flashUsbFirmware', arguments_: job},
       {method: 'cancelUsbFlash', arguments_: {jobId: 'flash-1'}},
     ]);
+  });
+
+  it('parses authorized Android USB devices for selection', () => {
+    expect(edgezUsbDevices({running: true, routePort: 3240, devices: [
+      '1-2=CP2102 USB to UART [10c4:ea60] busid=1-2',
+    ]})).toEqual([{busId: '1-2', label: 'CP2102 USB to UART [10c4:ea60] busid=1-2', vendorId: 0x10c4, productId: 0xea60}]);
+  });
+
+  it('runs the managed ESP32 flash flow through completion', async () => {
+    const transport = new FakeTransport();
+    const sdk = new EdgezMeshSdk({transport});
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({url: 'wss://appwrite.edgez.ai/v1/usb-runtimes/team-1', token: 'token-1'}),
+    }) as typeof fetch;
+    const invoke = transport.invoke.bind(transport);
+    transport.invoke = jest.fn(async <T,>(method: string, arguments_?: Record<string, unknown>) => {
+      if (method === 'inspectUsbFirmware') return {firmwareUri: 'content://firmware/merged.bin', size: 4096, sha256: 'b'.repeat(64)} as T;
+      const result = await invoke<T>(method, arguments_);
+      if (method === 'startUsbFlashTunnel') queueMicrotask(() => transport.emit({type: 'usb', usbTunnelState: 'connected'}));
+      if (method === 'flashUsbFirmware') queueMicrotask(() => {
+        transport.emit({type: 'usb', usbFlash: {type: 'flash.status', jobId: 'esp32-test', state: 'uploading', received: 4096, size: 4096}});
+        transport.emit({type: 'usb', usbFlash: {type: 'flash.status', jobId: 'esp32-test', state: 'complete'}});
+      });
+      return result;
+    });
+    const progress: string[] = [];
+    try {
+      await expect(sdk.flashEsp32Firmware({
+        projectId: 'project-1', teamId: 'team-1', jwt: 'jwt-1', busId: '1-2',
+        chip: 'esp32s3', firmwareUri: 'content://firmware/merged.bin', jobId: 'esp32-test',
+        onProgress: status => progress.push(status.state),
+      })).resolves.toMatchObject({jobId: 'esp32-test', chip: 'esp32s3', state: 'complete', size: 4096});
+      expect(progress).toEqual(['uploading', 'complete']);
+      expect(transport.calls).toEqual(expect.arrayContaining([
+        {method: 'flashUsbFirmware', arguments_: {jobId: 'esp32-test', profile: 'esp32s3', firmwareUri: 'content://firmware/merged.bin', size: 4096, sha256: 'b'.repeat(64)}},
+        {method: 'stopUsbIpServer', arguments_: undefined},
+      ]));
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 
   it('initializes with Flutter-compatible fields', async () => {

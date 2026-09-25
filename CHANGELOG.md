@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added an Android system firmware picker, on-device firmware size/SHA-256
+  inspection, typed USB device discovery, and a managed end-to-end ESP32,
+  ESP32-S3, and ESP32-C3 Type-C flashing operation.
+- Parse runtime flash status/log messages into typed SDK events and reliably
+  close the USB export after a managed flash finishes or fails.
+
 - Added an Android userspace USB/IP server for securely exporting attached
   ESP32 serial adapters, SEGGER J-Link probes, and OpenOCD-compatible USB
   devices to an external flashing service.

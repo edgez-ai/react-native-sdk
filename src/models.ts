@@ -245,6 +245,7 @@ export interface EdgezMeshEvent {
   usbEvent?: string;
   usbTunnelState?: 'connecting' | 'connected' | 'message' | 'disconnected' | 'failed' | 'stopped';
   usbTunnelMessage?: string;
+  usbFlash?: EdgezUsbFlashStatus;
   log?: string;
 }
 
@@ -255,6 +256,29 @@ export interface EdgezUsbIpServerStatus {
   devices: string[];
   tunnelState?: string;
   busId?: string;
+}
+
+export interface EdgezUsbDevice {
+  busId: string;
+  label: string;
+  vendorId?: number;
+  productId?: number;
+}
+
+export function edgezUsbDevices(status: EdgezUsbIpServerStatus): EdgezUsbDevice[] {
+  return status.devices.flatMap(value => {
+    const separator = value.indexOf('=');
+    const busId = separator < 0 ? value : value.slice(0, separator);
+    const label = separator < 0 ? value : value.slice(separator + 1);
+    if (!/^\d+-\d+$/.test(busId)) return [];
+    const ids = label.match(/\[([0-9a-f]{4}):([0-9a-f]{4})\]/i);
+    return [{
+      busId,
+      label,
+      vendorId: ids ? Number.parseInt(ids[1]!, 16) : undefined,
+      productId: ids ? Number.parseInt(ids[2]!, 16) : undefined,
+    }];
+  });
 }
 
 export interface EdgezUsbFlashTunnelOptions {
@@ -284,6 +308,44 @@ export interface EdgezUsbFlashJob {
   firmwareUri: string;
   size: number;
   sha256: string;
+}
+
+export type EdgezEsp32Chip = 'esp32' | 'esp32s3' | 'esp32c3';
+export type EdgezUsbFlashState = 'uploading' | 'verified' | 'flashing' | 'complete' | 'failed' | 'cancelled';
+
+export interface EdgezUsbFirmwareInfo {
+  firmwareUri: string;
+  size: number;
+  sha256: string;
+}
+
+export interface EdgezUsbFlashStatus {
+  type: 'flash.status' | 'flash.log';
+  jobId: string;
+  state: EdgezUsbFlashState;
+  message?: string;
+  received?: number;
+  size?: number;
+  credit?: number;
+}
+
+export interface EdgezManagedEsp32FlashOptions extends EdgezManagedUsbFlashTunnelOptions {
+  /** A full/merged flash image. The server writes this image at address 0x0. */
+  firmwareUri: string;
+  chip: EdgezEsp32Chip;
+  jobId?: string;
+  connectTimeoutMs?: number;
+  flashTimeoutMs?: number;
+  keepTunnelOpen?: boolean;
+  onProgress?: (status: EdgezUsbFlashStatus) => void;
+}
+
+export interface EdgezUsbFlashResult {
+  jobId: string;
+  chip: EdgezEsp32Chip;
+  size: number;
+  sha256: string;
+  state: 'complete';
 }
 
 export interface EdgezSdkReleaseCredential {

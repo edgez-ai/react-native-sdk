@@ -13,10 +13,15 @@ import {
   type EdgezSdkReleaseCredential,
   type EdgezSensorScriptConfig,
   type EdgezUsbIpServerStatus,
+  type EdgezUsbDevice,
   type EdgezUsbFlashTunnelOptions,
   type EdgezManagedUsbFlashTunnelOptions,
   type EdgezUsbFlashSession,
   type EdgezUsbFlashJob,
+  type EdgezUsbFirmwareInfo,
+  type EdgezUsbFlashStatus,
+  type EdgezManagedEsp32FlashOptions,
+  type EdgezUsbFlashResult,
   type EdgezVoiceChunk,
   type EdgezVoiceRecording,
   bytesFromNative,
@@ -24,6 +29,7 @@ import {
   edgezPublicChannelMask,
   edgezPublicChannelPorts,
   edgezNodeDisplayName,
+  edgezUsbDevices,
 } from './models';
 import {decodeBeacon, encodeNetworkPacket, Interface, Mime, Operation, type ProtocolObject} from './protocol';
 
@@ -59,7 +65,18 @@ export class EdgezNativeTransport implements EdgezPlatformTransport {
   subscribe(listener: (event: EdgezMeshEvent) => void): () => void {
     const subscription: EmitterSubscription = this.emitter.addListener('EdgezMeshEvent', raw => {
       const event = raw as EdgezMeshEvent;
-      listener({...event, packet: event.packet === undefined ? undefined : bytesFromNative(event.packet)});
+      let usbFlash: EdgezUsbFlashStatus | undefined;
+      if (event.usbTunnelMessage) {
+        try {
+          const message = JSON.parse(event.usbTunnelMessage) as Partial<EdgezUsbFlashStatus>;
+          if ((message.type === 'flash.status' || message.type === 'flash.log') && typeof message.jobId === 'string' && typeof message.state === 'string') {
+            usbFlash = message as EdgezUsbFlashStatus;
+          }
+        } catch {
+          // Preserve non-JSON runtime diagnostics as usbTunnelMessage.
+        }
+      }
+      listener({...event, usbFlash, packet: event.packet === undefined ? undefined : bytesFromNative(event.packet)});
     });
     return () => subscription.remove();
   }
@@ -70,6 +87,22 @@ const utf8Decoder = new TextDecoder();
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const take = (value: string, max: number) => value.slice(0, max);
 const u64 = (value: bigint) => BigInt.asUintN(64, value).toString();
+
+function deferred<T>() {
+  let done = false;
+  let resolvePromise!: (value: T | PromiseLike<T>) => void;
+  let rejectPromise!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  return {
+    promise,
+    settled: () => done,
+    resolve: (value: T | PromiseLike<T>) => { if (!done) { done = true; resolvePromise(value); } },
+    reject: (reason?: unknown) => { if (!done) { done = true; rejectPromise(reason); } },
+  };
+}
 
 function concat(...arrays: Uint8Array[]): Uint8Array {
   const result = new Uint8Array(arrays.reduce((sum, item) => sum + item.length, 0));
@@ -162,6 +195,17 @@ export class EdgezMeshSdk {
   startUsbIpServer(): Promise<EdgezUsbIpServerStatus> { return this.transport.invoke('startUsbIpServer'); }
   stopUsbIpServer(): Promise<EdgezUsbIpServerStatus> { return this.transport.invoke('stopUsbIpServer'); }
   getUsbIpServerStatus(): Promise<EdgezUsbIpServerStatus> { return this.transport.invoke('getUsbIpServerStatus'); }
+  async getUsbDevices(): Promise<EdgezUsbDevice[]> { return edgezUsbDevices(await this.getUsbIpServerStatus()); }
+  async discoverUsbDevices(timeoutMs = 30_000): Promise<EdgezUsbDevice[]> {
+    await this.startUsbIpServer();
+    const deadline = Date.now() + timeoutMs;
+    do {
+      const devices = await this.getUsbDevices();
+      if (devices.length) return devices;
+      await new Promise<void>(resolve => setTimeout(() => resolve(), 250));
+    } while (Date.now() < deadline);
+    throw new Error('No authorized USB device was found. Connect the ESP32 over USB-C and allow USB access.');
+  }
   startUsbFlashTunnel(options: EdgezUsbFlashTunnelOptions): Promise<EdgezUsbIpServerStatus> { return this.transport.invoke('startUsbFlashTunnel', {...options}); }
   async startManagedUsbFlashTunnel(options: EdgezManagedUsbFlashTunnelOptions): Promise<EdgezUsbIpServerStatus> {
     const endpoint = (options.endpoint ?? 'https://appwrite.edgez.ai/v1').replace(/\/$/, '');
@@ -186,6 +230,57 @@ export class EdgezMeshSdk {
   stopUsbFlashTunnel(): Promise<void> { return this.transport.invoke('stopUsbFlashTunnel'); }
   flashUsbFirmware(job: EdgezUsbFlashJob): Promise<void> { return this.transport.invoke('flashUsbFirmware', {...job}); }
   cancelUsbFlash(jobId: string): Promise<void> { return this.transport.invoke('cancelUsbFlash', {jobId}); }
+  inspectUsbFirmware(firmwareUri: string): Promise<EdgezUsbFirmwareInfo> { return this.transport.invoke('inspectUsbFirmware', {firmwareUri}); }
+  pickUsbFirmware(): Promise<EdgezUsbFirmwareInfo | null> { return this.transport.invoke('pickUsbFirmware'); }
+
+  async flashEsp32Firmware(options: EdgezManagedEsp32FlashOptions): Promise<EdgezUsbFlashResult> {
+    const jobId = options.jobId ?? `esp32-${Date.now().toString(36)}`;
+    const connectTimeoutMs = options.connectTimeoutMs ?? 30_000;
+    const flashTimeoutMs = options.flashTimeoutMs ?? 10 * 60_000;
+    const firmware = await this.inspectUsbFirmware(options.firmwareUri);
+    let tunnelStarted = false;
+    let unsubscribe = () => {};
+    try {
+      const connected = deferred<void>();
+      const finished = deferred<EdgezUsbFlashResult>();
+      let connectTimer: ReturnType<typeof setTimeout> | undefined;
+      let flashTimer: ReturnType<typeof setTimeout> | undefined;
+      unsubscribe = this.subscribe(event => {
+        if (event.type !== 'usb') return;
+        if (event.usbTunnelState === 'connected') connected.resolve(undefined);
+        if (event.usbTunnelState === 'failed' || event.usbTunnelState === 'disconnected') {
+          const error = new Error(event.usbTunnelMessage || `USB flash tunnel ${event.usbTunnelState}`);
+          if (!connected.settled()) connected.reject(error);
+          else if (!finished.settled()) finished.reject(error);
+        }
+        const status = event.usbFlash;
+        if (!status || status.jobId !== jobId) return;
+        if (status.state === 'complete') {
+          finished.resolve({...firmware, jobId, chip: options.chip, state: 'complete'});
+        } else if (status.state === 'failed' || status.state === 'cancelled') {
+          finished.reject(new Error(status.message || `ESP32 flash ${status.state}`));
+        }
+        try { options.onProgress?.(status); } catch { /* UI callbacks cannot interrupt flashing. */ }
+      });
+
+      try {
+        await this.startManagedUsbFlashTunnel(options);
+        tunnelStarted = true;
+        connectTimer = setTimeout(() => connected.reject(new Error('Timed out connecting to the USB flash runtime')), connectTimeoutMs);
+        await connected.promise;
+        clearTimeout(connectTimer);
+        await this.flashUsbFirmware({jobId, profile: options.chip, ...firmware});
+        flashTimer = setTimeout(() => finished.reject(new Error('Timed out waiting for ESP32 flashing to finish')), flashTimeoutMs);
+        return await finished.promise;
+      } finally {
+        if (connectTimer) clearTimeout(connectTimer);
+        if (flashTimer) clearTimeout(flashTimer);
+      }
+    } finally {
+      unsubscribe();
+      if (tunnelStarted && !options.keepTunnelOpen) await this.stopUsbIpServer().catch(() => undefined);
+    }
+  }
   requestMicrophonePermission(): Promise<boolean> { return this.transport.invoke('requestMicrophonePermission'); }
   requestNotificationPermission(): Promise<boolean> { return this.transport.invoke('requestNotificationPermission'); }
   notificationsAllowed(): Promise<boolean> { return this.transport.invoke('notificationsAllowed'); }
