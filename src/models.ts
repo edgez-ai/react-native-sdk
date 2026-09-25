@@ -1,7 +1,7 @@
 export type EdgezConnectionType = 'none' | 'ble';
 export type EdgezMeshEventType =
   | 'connection' | 'bleDevice' | 'ready' | 'packet' | 'status' | 'node'
-  | 'message' | 'voiceFrame' | 'voiceAudio' | 'otaProgress' | 'log';
+  | 'message' | 'voiceFrame' | 'voiceAudio' | 'otaProgress' | 'usb' | 'log';
 
 export interface EdgezBleDevice {
   id: string;
@@ -242,7 +242,48 @@ export interface EdgezMeshEvent {
   packet?: Uint8Array;
   sentBytes?: number;
   totalBytes?: number;
+  usbEvent?: string;
+  usbTunnelState?: 'connecting' | 'connected' | 'message' | 'disconnected' | 'failed' | 'stopped';
+  usbTunnelMessage?: string;
   log?: string;
+}
+
+export interface EdgezUsbIpServerStatus {
+  running: boolean;
+  socketName?: string;
+  routePort: number;
+  devices: string[];
+  tunnelState?: string;
+  busId?: string;
+}
+
+export interface EdgezUsbFlashTunnelOptions {
+  url: string;
+  token: string;
+  busId: string;
+}
+
+export interface EdgezManagedUsbFlashTunnelOptions {
+  endpoint?: string;
+  projectId: string;
+  teamId: string;
+  jwt: string;
+  busId: string;
+}
+
+export interface EdgezUsbFlashSession {
+  url: string;
+  token: string;
+  sessionId: string;
+  expiresAt: number;
+}
+
+export interface EdgezUsbFlashJob {
+  jobId: string;
+  profile: string;
+  firmwareUri: string;
+  size: number;
+  sha256: string;
 }
 
 export interface EdgezSdkReleaseCredential {

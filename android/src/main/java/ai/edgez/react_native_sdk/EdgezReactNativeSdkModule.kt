@@ -72,6 +72,10 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
     private var otaWriteStatus: Int? = null
     private val otaRunning = AtomicBoolean(false)
     private val otaAbort = AtomicBoolean(false)
+    private val usbIpLock = Any()
+    private var usbIpServer: UsbIpServer? = null
+    private var usbIpTunnel: UsbIpWebSocketBridge? = null
+    @Volatile private var usbIpTunnelState = "stopped"
     private var listenerCount = 0
 
     override fun getName() = "EdgezReactNativeSdk"
@@ -110,6 +114,86 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
     @ReactMethod fun disconnect(arguments: ReadableMap, promise: Promise) { stopScan(); closeGatt(); emit(mapOf("type" to "connection", "connection" to "none")); promise.resolve(null) }
     @ReactMethod fun initializeMesh(arguments: ReadableMap, promise: Promise) = queuePacket(arguments, promise)
     @ReactMethod fun sendPacket(arguments: ReadableMap, promise: Promise) = queuePacket(arguments, promise)
+
+    @ReactMethod
+    fun startUsbIpServer(arguments: ReadableMap, promise: Promise) {
+        runCatching {
+            val server = synchronized(usbIpLock) {
+                usbIpServer ?: UsbIpServer(reactContext, this::handleUsbEvent)
+                    .also { it.start(); usbIpServer = it }
+            }
+            server.publishUsbSnapshot()
+            usbIpStatus(server)
+        }.fold({ promise.resolve(it) }, { promise.reject("usb_ip_start_failed", it.message, it) })
+    }
+
+    @ReactMethod
+    fun stopUsbIpServer(arguments: ReadableMap, promise: Promise) {
+        val tunnel = synchronized(usbIpLock) { usbIpTunnel.also { usbIpTunnel = null } }
+        val server = synchronized(usbIpLock) { usbIpServer.also { usbIpServer = null } }
+        runCatching { tunnel?.close(); server?.close(); usbIpTunnelState = "stopped" }
+            .fold({ promise.resolve(usbIpStatus(null)) }, { promise.reject("usb_ip_stop_failed", it.message, it) })
+    }
+
+    @ReactMethod
+    fun getUsbIpServerStatus(arguments: ReadableMap, promise: Promise) {
+        promise.resolve(usbIpStatus(synchronized(usbIpLock) { usbIpServer }))
+    }
+
+    @ReactMethod
+    fun startUsbFlashTunnel(arguments: ReadableMap, promise: Promise) {
+        val url = arguments.getString("url").orEmpty()
+        val token = arguments.getString("token").orEmpty()
+        val busId = arguments.getString("busId").orEmpty()
+        runCatching {
+            synchronized(usbIpLock) {
+                check(usbIpTunnel == null) { "USB flash tunnel is already running" }
+                val server = usbIpServer ?: UsbIpServer(reactContext, this::handleUsbEvent)
+                    .also { it.start(); usbIpServer = it }
+                val tunnel = UsbIpWebSocketBridge(reactContext) { state, message ->
+                    usbIpTunnelState = state
+                    emit(mapOf("type" to "usb", "usbTunnelState" to state, "usbTunnelMessage" to message))
+                }
+                tunnel.start(url, token, busId, server.socketName())
+                usbIpTunnel = tunnel
+                usbIpTunnelState = "connecting"
+                usbIpStatus(server).apply {
+                    putString("tunnelState", "connecting")
+                    putString("busId", busId)
+                }
+            }
+        }.fold({ promise.resolve(it) }, { promise.reject("usb_flash_tunnel_failed", it.message, it) })
+    }
+
+    @ReactMethod
+    fun stopUsbFlashTunnel(arguments: ReadableMap, promise: Promise) {
+        val tunnel = synchronized(usbIpLock) { usbIpTunnel.also { usbIpTunnel = null } }
+        runCatching { tunnel?.close(); usbIpTunnelState = "stopped" }
+            .fold({ promise.resolve(null) }, { promise.reject("usb_flash_tunnel_stop_failed", it.message, it) })
+    }
+
+    @ReactMethod
+    fun flashUsbFirmware(arguments: ReadableMap, promise: Promise) {
+        runCatching {
+            val tunnel = synchronized(usbIpLock) { usbIpTunnel }
+                ?: error("USB flash tunnel is not running")
+            val jobId = arguments.getString("jobId").orEmpty()
+            val profile = arguments.getString("profile").orEmpty()
+            val firmwareUri = arguments.getString("firmwareUri").orEmpty()
+            val size = arguments.getDouble("size").toLong()
+            val sha256 = arguments.getString("sha256").orEmpty()
+            tunnel.startFlash(jobId, profile, firmwareUri, size, sha256)
+        }.fold({ promise.resolve(null) }, { promise.reject("usb_flash_start_failed", it.message, it) })
+    }
+
+    @ReactMethod
+    fun cancelUsbFlash(arguments: ReadableMap, promise: Promise) {
+        runCatching {
+            val tunnel = synchronized(usbIpLock) { usbIpTunnel }
+                ?: error("USB flash tunnel is not running")
+            tunnel.cancelFlash(arguments.getString("jobId").orEmpty())
+        }.fold({ promise.resolve(null) }, { promise.reject("usb_flash_cancel_failed", it.message, it) })
+    }
 
     @ReactMethod
     fun isOtaReady(arguments: ReadableMap, promise: Promise) { promise.resolve(gatt != null && ota != null) }
@@ -402,7 +486,25 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
         reactContext.runOnJSQueueThread { reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java).emit("EdgezMeshEvent", Arguments.makeNativeMap(event)) }
     }
 
-    override fun invalidate() { stopScan(); discardVoiceRecording(); voicePlayer?.release(); voicePlayer = null; closeGatt(); super.invalidate() }
+    private fun handleUsbEvent(event: String) {
+        emit(mapOf("type" to "usb", "usbEvent" to event))
+        synchronized(usbIpLock) { usbIpTunnel }?.sendUsbEvent(event)
+    }
+
+    private fun usbIpStatus(server: UsbIpServer?): WritableMap = Arguments.createMap().apply {
+        putBoolean("running", server != null)
+        putString("socketName", server?.socketName())
+        putInt("routePort", UsbIpServer.ROUTE_PORT)
+        putArray("devices", Arguments.fromList(server?.exportedDevices() ?: emptyList<String>()))
+        putString("tunnelState", usbIpTunnelState)
+    }
+
+    override fun invalidate() {
+        stopScan(); discardVoiceRecording(); voicePlayer?.release(); voicePlayer = null; closeGatt()
+        synchronized(usbIpLock) { usbIpTunnel.also { usbIpTunnel = null } }?.close()
+        synchronized(usbIpLock) { usbIpServer.also { usbIpServer = null } }?.close()
+        super.invalidate()
+    }
 }
 
 private class FrameAccumulator {

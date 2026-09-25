@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added an Android userspace USB/IP server for securely exporting attached
+  ESP32 serial adapters, SEGGER J-Link probes, and OpenOCD-compatible USB
+  devices to an external flashing service.
+- Added an authenticated binary WebSocket bridge between the Android USB/IP
+  server and an external flashing service.
+- Added managed Appwrite flash sessions that exchange an application JWT for a
+  short-lived, organization-scoped WebSocket credential.
+
 ## 0.1.3
 
 - Added 23 named Organic Maps point icons for animals, people, vehicles, and IoT

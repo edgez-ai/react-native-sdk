@@ -12,6 +12,11 @@ import {
   type EdgezMeshNode,
   type EdgezSdkReleaseCredential,
   type EdgezSensorScriptConfig,
+  type EdgezUsbIpServerStatus,
+  type EdgezUsbFlashTunnelOptions,
+  type EdgezManagedUsbFlashTunnelOptions,
+  type EdgezUsbFlashSession,
+  type EdgezUsbFlashJob,
   type EdgezVoiceChunk,
   type EdgezVoiceRecording,
   bytesFromNative,
@@ -154,6 +159,33 @@ export class EdgezMeshSdk {
   stopBleScan(): Promise<void> { return this.transport.invoke('stopBleScan'); }
   connectBle(deviceId: string): Promise<void> { return this.transport.invoke('connectBle', {deviceId}); }
   disconnect(): Promise<void> { return this.transport.invoke('disconnect'); }
+  startUsbIpServer(): Promise<EdgezUsbIpServerStatus> { return this.transport.invoke('startUsbIpServer'); }
+  stopUsbIpServer(): Promise<EdgezUsbIpServerStatus> { return this.transport.invoke('stopUsbIpServer'); }
+  getUsbIpServerStatus(): Promise<EdgezUsbIpServerStatus> { return this.transport.invoke('getUsbIpServerStatus'); }
+  startUsbFlashTunnel(options: EdgezUsbFlashTunnelOptions): Promise<EdgezUsbIpServerStatus> { return this.transport.invoke('startUsbFlashTunnel', {...options}); }
+  async startManagedUsbFlashTunnel(options: EdgezManagedUsbFlashTunnelOptions): Promise<EdgezUsbIpServerStatus> {
+    const endpoint = (options.endpoint ?? 'https://appwrite.edgez.ai/v1').replace(/\/$/, '');
+    const response = await fetch(`${endpoint}/teams/${encodeURIComponent(options.teamId)}/usb-flash/sessions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Appwrite-Project': options.projectId,
+        'X-Appwrite-JWT': options.jwt,
+      },
+      body: '{}',
+    });
+    if (!response.ok) {
+      throw new Error(`Unable to create USB flash session (${response.status}): ${await response.text()}`);
+    }
+    const session = await response.json() as EdgezUsbFlashSession;
+    if (!session.url?.startsWith('wss://') || !session.token) {
+      throw new Error('USB flash session response is invalid');
+    }
+    return this.startUsbFlashTunnel({url: session.url, token: session.token, busId: options.busId});
+  }
+  stopUsbFlashTunnel(): Promise<void> { return this.transport.invoke('stopUsbFlashTunnel'); }
+  flashUsbFirmware(job: EdgezUsbFlashJob): Promise<void> { return this.transport.invoke('flashUsbFirmware', {...job}); }
+  cancelUsbFlash(jobId: string): Promise<void> { return this.transport.invoke('cancelUsbFlash', {jobId}); }
   requestMicrophonePermission(): Promise<boolean> { return this.transport.invoke('requestMicrophonePermission'); }
   requestNotificationPermission(): Promise<boolean> { return this.transport.invoke('requestNotificationPermission'); }
   notificationsAllowed(): Promise<boolean> { return this.transport.invoke('notificationsAllowed'); }

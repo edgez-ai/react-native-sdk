@@ -14,6 +14,78 @@ class FakeTransport implements EdgezPlatformTransport {
 const identity: EdgezUserIdentity = {userUuid: '00000000-0000-4000-8000-000000000016', userIdHigh: 11n, userIdLow: 22n, name: 'Protocol User', privateKey: new Uint8Array(32), publicKey: Uint8Array.from([1,2,3,4])};
 
 describe('EdgezMeshSdk packet API', () => {
+  it('exposes the Android USB/IP server lifecycle', async () => {
+    const transport = new FakeTransport();
+    const sdk = new EdgezMeshSdk({transport});
+    await sdk.startUsbIpServer();
+    await sdk.getUsbIpServerStatus();
+    await sdk.stopUsbIpServer();
+    expect(transport.calls.map(call => call.method)).toEqual(['startUsbIpServer', 'getUsbIpServerStatus', 'stopUsbIpServer']);
+  });
+
+  it('starts an authenticated USB flashing WebSocket tunnel', async () => {
+    const transport = new FakeTransport();
+    const sdk = new EdgezMeshSdk({transport});
+    await sdk.startUsbFlashTunnel({url: 'wss://flash.edgez.ai/v1/tunnel', token: 'short-lived-token', busId: '1-2'});
+    await sdk.stopUsbFlashTunnel();
+    expect(transport.calls).toEqual([
+      {method: 'startUsbFlashTunnel', arguments_: {url: 'wss://flash.edgez.ai/v1/tunnel', token: 'short-lived-token', busId: '1-2'}},
+      {method: 'stopUsbFlashTunnel', arguments_: undefined},
+    ]);
+  });
+
+  it('exchanges an Appwrite JWT for a managed USB flash tunnel', async () => {
+    const transport = new FakeTransport();
+    const sdk = new EdgezMeshSdk({transport});
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        url: 'wss://appwrite.edgez.ai/v1/usb-runtimes/team-1',
+        token: 'short-lived-token',
+        sessionId: 'session-1',
+        expiresAt: 1800000300,
+      }),
+    }) as typeof fetch;
+    try {
+      await sdk.startManagedUsbFlashTunnel({
+        projectId: 'project-1', teamId: 'team-1', jwt: 'jwt-1', busId: '1-2',
+      });
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://appwrite.edgez.ai/v1/teams/team-1/usb-flash/sessions',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({'X-Appwrite-Project': 'project-1', 'X-Appwrite-JWT': 'jwt-1'}),
+        }),
+      );
+      expect(transport.calls.at(-1)).toEqual({
+        method: 'startUsbFlashTunnel',
+        arguments_: {
+          url: 'wss://appwrite.edgez.ai/v1/usb-runtimes/team-1',
+          token: 'short-lived-token',
+          busId: '1-2',
+        },
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it('uploads and controls a USB flash job', async () => {
+    const transport = new FakeTransport();
+    const sdk = new EdgezMeshSdk({transport});
+    const job = {
+      jobId: 'flash-1', profile: 'esp32s3', firmwareUri: 'content://firmware/app.bin',
+      size: 1024, sha256: 'a'.repeat(64),
+    };
+    await sdk.flashUsbFirmware(job);
+    await sdk.cancelUsbFlash(job.jobId);
+    expect(transport.calls.slice(-2)).toEqual([
+      {method: 'flashUsbFirmware', arguments_: job},
+      {method: 'cancelUsbFlash', arguments_: {jobId: 'flash-1'}},
+    ]);
+  });
+
   it('initializes with Flutter-compatible fields', async () => {
     const transport = new FakeTransport();
     const sdk = new EdgezMeshSdk({transport, releaseCredential: {compatibility: '^0.5.0', releaseId: 'edgez-react-native-sdk@test', signature: new Uint8Array(64)}});

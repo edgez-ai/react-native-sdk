@@ -14,6 +14,7 @@ iOS is not yet implemented.
 - native Opus/AMR voice-message recording and playback
 - device provisioning settings and Lua driver transfer
 - BLE firmware OTA with acknowledged writes, progress, and cancellation
+- Android USB/IP host support for remote ESP32, J-Link, and OpenOCD flashing
 - Android BLE foreground service and message/call notification channels
 - best-known Android location lookup for shared beacons
 - native Organic Maps view with mesh-node markers, offline map downloads,
@@ -83,6 +84,71 @@ await session.sendTextMessage(node.nodeNum, 'Hello mesh');
 Applications that use another state architecture can construct `EdgezMeshSdk`
 directly. Tests can inject an `EdgezPlatformTransport` without Android or BLE
 hardware.
+
+## Remote USB flashing (Android)
+
+The Android SDK can export USB devices attached to the phone through the same
+userspace USB/IP implementation used by EdgeZ Android DevTools. The phone owns
+the USB connection; a separate flash server runs esptool, SEGGER J-Link tools,
+or OpenOCD and reaches the SDK's abstract socket through the application's
+authenticated tunnel.
+
+```ts
+const sdk = new EdgezMeshSdk();
+const status = await sdk.startManagedUsbFlashTunnel({
+  endpoint: 'https://appwrite.edgez.ai/v1',
+  projectId: appwriteProjectId,
+  teamId: organizationId,
+  jwt: await account.createJWT().then(result => result.jwt),
+  busId: '1-2',
+});
+
+await sdk.flashUsbFirmware({
+  jobId: 'flash-20260925-1',
+  profile: 'esp32s3',
+  firmwareUri: 'content://com.example.files/firmware.bin',
+  size: 1048576,
+  sha256: '<64 lowercase hex characters>',
+});
+
+// Optional cancellation; progress and tool logs arrive as usbTunnelMessage
+// events containing flash.status / flash.log JSON.
+await sdk.cancelUsbFlash('flash-20260925-1');
+
+console.log(status.socketName, status.routePort, status.devices);
+
+const unsubscribe = sdk.subscribe(event => {
+  if (event.type === 'usb') console.log(event.usbEvent);
+});
+
+// Stop exporting USB when flashing is finished.
+await sdk.stopUsbFlashTunnel();
+unsubscribe();
+```
+
+`socketName` names an Android abstract Unix socket and is deliberately not a
+public TCP listener. The app must pass it to its secure flash-server tunnel.
+USB/IP route port `3240` is provided for tunnel routing. Android asks the user
+for USB-host permission for each attached device. The transport supports
+CP210x-style ESP32 serial flashing, SEGGER J-Link, and generic USB
+control/bulk/interrupt transfers used by OpenOCD-compatible probes. The flash
+server remains responsible for selecting firmware, invoking the flashing tool,
+reporting progress, and authenticating the operation.
+
+`startManagedUsbFlashTunnel` creates a five-minute, organization-scoped flash
+session through the authenticated Appwrite API. The JWT is used only for that
+HTTPS exchange and is not passed to the native tunnel. Applications that
+already obtain a flash session can call `startUsbFlashTunnel` with its `url`
+and `token` directly.
+
+The tunnel requires `wss://`, sends its short-lived credential as a Bearer
+token, identifies the selected USB device with `X-EdgeZ-USB-Bus-ID`, and sends
+versioned binary frames that distinguish USB/IP from firmware chunks. The
+runtime grants upload credits only after chunks are persisted. Text frames
+control the flash job and are surfaced as USB tunnel events for status and
+progress messages. Only one
+tunnel can run in an SDK instance at a time, and a dropped connection is not
+silently resumed during a flash.
 
 ## Organic Maps (Android)
 
