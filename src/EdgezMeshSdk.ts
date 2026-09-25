@@ -248,6 +248,7 @@ export class EdgezMeshSdk {
       const connected = deferred<void>();
       const finished = deferred<EdgezUsbFlashResult>();
       let connectTimer: ReturnType<typeof setTimeout> | undefined;
+      let connectPollTimer: ReturnType<typeof setInterval> | undefined;
       let flashTimer: ReturnType<typeof setTimeout> | undefined;
       unsubscribe = this.subscribe(event => {
         if (event.type !== 'usb') return;
@@ -271,13 +272,23 @@ export class EdgezMeshSdk {
         await this.startManagedUsbFlashTunnel(options);
         tunnelStarted = true;
         connectTimer = setTimeout(() => connected.reject(new Error('Timed out connecting to the USB flash runtime')), connectTimeoutMs);
+        connectPollTimer = setInterval(() => {
+          void this.getUsbIpServerStatus().then(status => {
+            if (status.tunnelState === 'connected' || status.tunnelState === 'message') connected.resolve(undefined);
+            else if (status.tunnelState === 'failed' || status.tunnelState === 'disconnected') {
+              connected.reject(new Error(`USB flash tunnel ${status.tunnelState}`));
+            }
+          }).catch(() => undefined);
+        }, 250);
         await connected.promise;
         clearTimeout(connectTimer);
+        clearInterval(connectPollTimer);
         await this.flashUsbFirmware({jobId, profile: options.chip, ...firmware});
         flashTimer = setTimeout(() => finished.reject(new Error('Timed out waiting for ESP32 flashing to finish')), flashTimeoutMs);
         return await finished.promise;
       } finally {
         if (connectTimer) clearTimeout(connectTimer);
+        if (connectPollTimer) clearInterval(connectPollTimer);
         if (flashTimer) clearTimeout(flashTimer);
       }
     } finally {
@@ -301,6 +312,7 @@ export class EdgezMeshSdk {
       const connected = deferred<void>();
       const finished = deferred<EdgezUsbFlashResult>();
       let connectTimer: ReturnType<typeof setTimeout> | undefined;
+      let connectPollTimer: ReturnType<typeof setInterval> | undefined;
       let flashTimer: ReturnType<typeof setTimeout> | undefined;
       unsubscribe = this.subscribe(event => {
         if (event.type !== 'usb') return;
@@ -324,13 +336,23 @@ export class EdgezMeshSdk {
         await this.startManagedUsbFlashTunnel(options);
         tunnelStarted = true;
         connectTimer = setTimeout(() => connected.reject(new Error('Timed out connecting to the USB flash runtime')), connectTimeoutMs);
+        connectPollTimer = setInterval(() => {
+          void this.getUsbIpServerStatus().then(status => {
+            if (status.tunnelState === 'connected' || status.tunnelState === 'message') connected.resolve(undefined);
+            else if (status.tunnelState === 'failed' || status.tunnelState === 'disconnected') {
+              connected.reject(new Error(`USB flash tunnel ${status.tunnelState}`));
+            }
+          }).catch(() => undefined);
+        }, 250);
         await connected.promise;
         clearTimeout(connectTimer);
+        clearInterval(connectPollTimer);
         await this.flashUsbReleaseFirmware({jobId, profile: options.chip, firmwareUrl: options.firmwareUrl, sha256: options.sha256});
         flashTimer = setTimeout(() => finished.reject(new Error('Timed out waiting for ESP32 flashing to finish')), flashTimeoutMs);
         return await finished.promise;
       } finally {
         if (connectTimer) clearTimeout(connectTimer);
+        if (connectPollTimer) clearInterval(connectPollTimer);
         if (flashTimer) clearTimeout(flashTimer);
       }
     } finally {

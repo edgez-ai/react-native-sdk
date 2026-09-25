@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.8
+
+- Confirm managed USB tunnel readiness from the native server's persistent
+  status as well as its event stream, so a React Native startup race cannot
+  prevent `flash.start` from being sent after USB/IP attaches.
+- Preserve the native tunnel's connected state while flash status messages are
+  received and remove a race that could overwrite it with `connecting`.
+
 ## 0.1.7
 
 - Allow up to two minutes for a cold organization USB runtime to complete its

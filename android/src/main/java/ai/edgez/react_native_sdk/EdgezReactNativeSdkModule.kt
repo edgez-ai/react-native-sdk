@@ -160,14 +160,20 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
                 val server = usbIpServer ?: UsbIpServer(reactContext, this::handleUsbEvent)
                     .also { it.start(); usbIpServer = it }
                 val tunnel = UsbIpWebSocketBridge(reactContext) { state, message ->
-                    usbIpTunnelState = state
+                    if (state != "message") usbIpTunnelState = state
                     emit(mapOf("type" to "usb", "usbTunnelState" to state, "usbTunnelMessage" to message))
                 }
-                tunnel.start(url, token, busId, server.socketName())
                 usbIpTunnel = tunnel
                 usbIpTunnelState = "connecting"
+                try {
+                    tunnel.start(url, token, busId, server.socketName())
+                } catch (error: Throwable) {
+                    usbIpTunnel = null
+                    usbIpTunnelState = "failed"
+                    throw error
+                }
                 usbIpStatus(server).apply {
-                    putString("tunnelState", "connecting")
+                    putString("tunnelState", usbIpTunnelState)
                     putString("busId", busId)
                 }
             }
