@@ -1,0 +1,77 @@
+name: Publish SDK to npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      npm-tag:
+        description: npm distribution tag
+        required: true
+        default: latest
+        type: choice
+        options:
+          - latest
+          - next
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish @edgez/react-native-sdk
+    runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate package
+        run: |
+          npm test -- --runInBand
+          npm run typecheck
+          npm run build
+
+      - name: Verify release version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ "$package_version" != "$tag_version" ]]; then
+            echo "package.json version $package_version does not match tag $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+      - name: Select npm distribution tag
+        id: npm-tag
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.npm-tag }}
+        run: echo "value=${REQUESTED_TAG:-latest}" >> "$GITHUB_OUTPUT"
+
+      - name: Update npm CLI
+        run: npm install --global npm@latest
+
+      - name: Publish with npm token and provenance
+        if: env.NPM_TOKEN != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+        run: npm publish --access public --provenance --tag "${{ steps.npm-tag.outputs.value }}"
+
+      - name: Publish with npm Trusted Publishing and provenance
+        if: env.NPM_TOKEN == ''
+        run: npm publish --access public --provenance --tag "${{ steps.npm-tag.outputs.value }}"
