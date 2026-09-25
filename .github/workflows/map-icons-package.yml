@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   package:
@@ -17,6 +18,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+          registry-url: 'https://registry.npmjs.org'
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
@@ -37,3 +39,8 @@ jobs:
           files: dist/*.tgz
           fail_on_unmatched_files: true
           generate_release_notes: true
+      - name: Publish SDK to npm with provenance
+        if: github.ref == 'refs/heads/codex/map-point-icons' && startsWith(github.event.head_commit.message, 'release: publish')
+        run: |
+          npm install --global npm@latest
+          npm publish --access public --provenance
