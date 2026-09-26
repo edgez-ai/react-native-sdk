@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.16
+
+- Add a check-only app bundle update API so applications can ask the user
+  before downloading and staging an update.
+- Register the native bundle runtime in debug builds, while continuing to load
+  JavaScript from Metro.
+
 ## 0.1.15
 
 - Require app bundle manifests to be signed by the same certificate as the

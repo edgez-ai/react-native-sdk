@@ -43,9 +43,9 @@ object EdgezBundleUpdateManager {
     /** Called by the host application's MainApplication before React starts. */
     @JvmStatic
     fun resolveBundleFile(context: Context, debug: Boolean, runtimeVersion: String): String? {
-        if (debug) return null
         val prefs = prefs(context)
         prefs.edit().putString(KEY_CURRENT_RUNTIME, runtimeVersion).commit()
+        if (debug) return null
         val path = prefs.getString(KEY_BUNDLE_PATH, null) ?: return null
         val file = File(path)
         if (prefs.getString(KEY_UPDATE_RUNTIME, null) != runtimeVersion || !file.isFile) {

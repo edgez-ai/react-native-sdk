@@ -31,9 +31,10 @@ export interface EdgezAppBundleUpdateOptions {
 }
 
 export interface EdgezAppBundleUpdateResult {
-  state: 'unsupported' | 'current' | 'incompatible' | 'rejected' | 'installed';
+  state: 'unsupported' | 'current' | 'incompatible' | 'rejected' | 'available' | 'installed';
   manifest?: EdgezAppBundleManifest;
   status?: EdgezAppBundleUpdateStatus;
+  bundleUrl?: string;
 }
 
 type NativeBundleModule = {
@@ -126,7 +127,7 @@ export async function rollbackAppBundleUpdate(): Promise<EdgezAppBundleUpdateSta
  * is installed into the Android app's private storage and is never sent to a
  * connected device. It becomes active on the next app process start.
  */
-export async function checkAndInstallAppBundleUpdate(options: EdgezAppBundleUpdateOptions): Promise<EdgezAppBundleUpdateResult> {
+export async function checkAppBundleUpdate(options: EdgezAppBundleUpdateOptions): Promise<EdgezAppBundleUpdateResult> {
   if (Platform.OS !== 'android') return {state: 'unsupported'};
   const {owner, repository} = repositoryParts(options.repositoryUrl);
   const base = (options.otaBaseUrl ?? 'https://github.edgez.biz').replace(/\/$/, '');
@@ -142,5 +143,16 @@ export async function checkAndInstallAppBundleUpdate(options: EdgezAppBundleUpda
   if (manifest.updateId === status.rejectedUpdateId) return {state: 'rejected', manifest, status};
   if (manifest.updateId === status.updateId && status.installed) return {state: 'current', manifest, status};
   const bundleUrl = `${prefix}/download/${encodeURIComponent(manifest.releaseTag)}/${encodeURIComponent(manifest.bundleAssetName)}`;
-  return {state: 'installed', manifest, status: await installAppBundleUpdate(manifest, bundleUrl)};
+  return {state: 'available', manifest, status, bundleUrl};
+}
+
+export async function checkAndInstallAppBundleUpdate(options: EdgezAppBundleUpdateOptions): Promise<EdgezAppBundleUpdateResult> {
+  const result = await checkAppBundleUpdate(options);
+  if (result.state !== 'available' || !result.manifest || !result.bundleUrl) return result;
+  return {
+    state: 'installed',
+    manifest: result.manifest,
+    bundleUrl: result.bundleUrl,
+    status: await installAppBundleUpdate(result.manifest, result.bundleUrl),
+  };
 }
