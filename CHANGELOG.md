@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.19
+
+- Keep optional USB flash fields absent across the Android native bridge so
+  J-Link and OpenOCD jobs do not receive esptool-only defaults.
+
 ## 0.1.18
 
 - Align the managed nRF54L15 flow with the deployed `nrf54l15-jlink` runtime

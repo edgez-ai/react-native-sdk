@@ -227,10 +227,10 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
             val firmwareUri = arguments.getString("firmwareUri").orEmpty()
             val size = arguments.getDouble("size").toLong()
             val sha256 = arguments.getString("sha256").orEmpty()
-            val baudRate = if (arguments.hasKey("baudRate") && !arguments.isNull("baudRate")) arguments.getDouble("baudRate").toInt() else 115200
-            val ackWindow = if (arguments.hasKey("ackWindow") && !arguments.isNull("ackWindow")) arguments.getDouble("ackWindow").toInt() else 5
+            val baudRate = if (arguments.hasKey("baudRate") && !arguments.isNull("baudRate")) arguments.getDouble("baudRate").toInt() else 0
+            val ackWindow = if (arguments.hasKey("ackWindow") && !arguments.isNull("ackWindow")) arguments.getDouble("ackWindow").toInt() else 0
             val timeoutSeconds = if (arguments.hasKey("timeoutSeconds") && !arguments.isNull("timeoutSeconds")) arguments.getDouble("timeoutSeconds").toInt() else 1800
-            val esptoolConfig = if (arguments.hasKey("esptoolConfig") && !arguments.isNull("esptoolConfig")) arguments.getString("esptoolConfig").orEmpty() else "high-latency"
+            val esptoolConfig = if (arguments.hasKey("esptoolConfig") && !arguments.isNull("esptoolConfig")) arguments.getString("esptoolConfig").orEmpty() else ""
             tunnel.startFlash(jobId, profile, baudRate, ackWindow, timeoutSeconds, esptoolConfig, firmwareUri, size, sha256)
         }.fold({ promise.resolve(null) }, { promise.reject("usb_flash_start_failed", it.message, it) })
     }
@@ -243,10 +243,10 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
             tunnel.startReleaseFlash(
                 arguments.getString("jobId").orEmpty(),
                 arguments.getString("profile").orEmpty(),
-                if (arguments.hasKey("baudRate") && !arguments.isNull("baudRate")) arguments.getDouble("baudRate").toInt() else 115200,
-                if (arguments.hasKey("ackWindow") && !arguments.isNull("ackWindow")) arguments.getDouble("ackWindow").toInt() else 5,
+                if (arguments.hasKey("baudRate") && !arguments.isNull("baudRate")) arguments.getDouble("baudRate").toInt() else 0,
+                if (arguments.hasKey("ackWindow") && !arguments.isNull("ackWindow")) arguments.getDouble("ackWindow").toInt() else 0,
                 if (arguments.hasKey("timeoutSeconds") && !arguments.isNull("timeoutSeconds")) arguments.getDouble("timeoutSeconds").toInt() else 1800,
-                if (arguments.hasKey("esptoolConfig") && !arguments.isNull("esptoolConfig")) arguments.getString("esptoolConfig").orEmpty() else "high-latency",
+                if (arguments.hasKey("esptoolConfig") && !arguments.isNull("esptoolConfig")) arguments.getString("esptoolConfig").orEmpty() else "",
                 arguments.getString("firmwareUrl").orEmpty(),
                 arguments.getString("sha256").orEmpty(),
             )
