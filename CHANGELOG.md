@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.11
+
+- Keep an active ESP32 flash running while esptool continues to report progress,
+  using a 90-second inactivity watchdog instead of terminating every job at the
+  previous ten-minute deadline. Retain a 30-minute absolute safety ceiling.
+
 ## 0.1.10
 
 - Let Android apps select 115200, 230400, 460800, or 921600 baud for each

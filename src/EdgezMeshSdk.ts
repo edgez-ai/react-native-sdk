@@ -240,7 +240,8 @@ export class EdgezMeshSdk {
   async flashEsp32Firmware(options: EdgezManagedEsp32FlashOptions): Promise<EdgezUsbFlashResult> {
     const jobId = options.jobId ?? `esp32-${Date.now().toString(36)}`;
     const connectTimeoutMs = options.connectTimeoutMs ?? 120_000;
-    const flashTimeoutMs = options.flashTimeoutMs ?? 10 * 60_000;
+    const flashTimeoutMs = options.flashTimeoutMs ?? 30 * 60_000;
+    const flashInactivityTimeoutMs = options.flashInactivityTimeoutMs ?? 90_000;
     const firmware = await this.inspectUsbFirmware(options.firmwareUri);
     let tunnelStarted = false;
     let unsubscribe = () => {};
@@ -250,6 +251,15 @@ export class EdgezMeshSdk {
       let connectTimer: ReturnType<typeof setTimeout> | undefined;
       let connectPollTimer: ReturnType<typeof setInterval> | undefined;
       let flashTimer: ReturnType<typeof setTimeout> | undefined;
+      let flashInactivityTimer: ReturnType<typeof setTimeout> | undefined;
+      const refreshFlashInactivityTimer = () => {
+        if (flashInactivityTimeoutMs <= 0 || finished.settled()) return;
+        if (flashInactivityTimer) clearTimeout(flashInactivityTimer);
+        flashInactivityTimer = setTimeout(
+          () => finished.reject(new Error(`No ESP32 flash progress received for ${Math.round(flashInactivityTimeoutMs / 1000)} seconds`)),
+          flashInactivityTimeoutMs,
+        );
+      };
       unsubscribe = this.subscribe(event => {
         if (event.type !== 'usb') return;
         if (event.usbTunnelState === 'connected') connected.resolve(undefined);
@@ -260,6 +270,7 @@ export class EdgezMeshSdk {
         }
         const status = event.usbFlash;
         if (!status || status.jobId !== jobId) return;
+        if (status.state !== 'complete' && status.state !== 'failed' && status.state !== 'cancelled') refreshFlashInactivityTimer();
         if (status.state === 'complete') {
           finished.resolve({...firmware, jobId, chip: options.chip, state: 'complete'});
         } else if (status.state === 'failed' || status.state === 'cancelled') {
@@ -284,12 +295,14 @@ export class EdgezMeshSdk {
         clearTimeout(connectTimer);
         clearInterval(connectPollTimer);
         await this.flashUsbFirmware({jobId, profile: options.chip, baudRate: options.baudRate ?? 115200, ...firmware});
+        refreshFlashInactivityTimer();
         flashTimer = setTimeout(() => finished.reject(new Error('Timed out waiting for ESP32 flashing to finish')), flashTimeoutMs);
         return await finished.promise;
       } finally {
         if (connectTimer) clearTimeout(connectTimer);
         if (connectPollTimer) clearInterval(connectPollTimer);
         if (flashTimer) clearTimeout(flashTimer);
+        if (flashInactivityTimer) clearTimeout(flashInactivityTimer);
       }
     } finally {
       unsubscribe();
@@ -304,7 +317,8 @@ export class EdgezMeshSdk {
     }
     if (!/^[a-fA-F0-9]{64}$/.test(options.sha256)) throw new Error('Firmware SHA-256 is invalid');
     const connectTimeoutMs = options.connectTimeoutMs ?? 120_000;
-    const flashTimeoutMs = options.flashTimeoutMs ?? 10 * 60_000;
+    const flashTimeoutMs = options.flashTimeoutMs ?? 30 * 60_000;
+    const flashInactivityTimeoutMs = options.flashInactivityTimeoutMs ?? 90_000;
     let tunnelStarted = false;
     let unsubscribe = () => {};
     let size = 0;
@@ -314,6 +328,15 @@ export class EdgezMeshSdk {
       let connectTimer: ReturnType<typeof setTimeout> | undefined;
       let connectPollTimer: ReturnType<typeof setInterval> | undefined;
       let flashTimer: ReturnType<typeof setTimeout> | undefined;
+      let flashInactivityTimer: ReturnType<typeof setTimeout> | undefined;
+      const refreshFlashInactivityTimer = () => {
+        if (flashInactivityTimeoutMs <= 0 || finished.settled()) return;
+        if (flashInactivityTimer) clearTimeout(flashInactivityTimer);
+        flashInactivityTimer = setTimeout(
+          () => finished.reject(new Error(`No ESP32 flash progress received for ${Math.round(flashInactivityTimeoutMs / 1000)} seconds`)),
+          flashInactivityTimeoutMs,
+        );
+      };
       unsubscribe = this.subscribe(event => {
         if (event.type !== 'usb') return;
         if (event.usbTunnelState === 'connected') connected.resolve(undefined);
@@ -324,6 +347,7 @@ export class EdgezMeshSdk {
         }
         const status = event.usbFlash;
         if (!status || status.jobId !== jobId) return;
+        if (status.state !== 'complete' && status.state !== 'failed' && status.state !== 'cancelled') refreshFlashInactivityTimer();
         if (status.size) size = status.size;
         if (status.state === 'complete') {
           finished.resolve({jobId, chip: options.chip, size, sha256: options.sha256.toLowerCase(), state: 'complete'});
@@ -348,12 +372,14 @@ export class EdgezMeshSdk {
         clearTimeout(connectTimer);
         clearInterval(connectPollTimer);
         await this.flashUsbReleaseFirmware({jobId, profile: options.chip, baudRate: options.baudRate ?? 115200, firmwareUrl: options.firmwareUrl, sha256: options.sha256});
+        refreshFlashInactivityTimer();
         flashTimer = setTimeout(() => finished.reject(new Error('Timed out waiting for ESP32 flashing to finish')), flashTimeoutMs);
         return await finished.promise;
       } finally {
         if (connectTimer) clearTimeout(connectTimer);
         if (connectPollTimer) clearInterval(connectPollTimer);
         if (flashTimer) clearTimeout(flashTimer);
+        if (flashInactivityTimer) clearTimeout(flashInactivityTimer);
       }
     } finally {
       unsubscribe();

@@ -347,6 +347,9 @@ export interface EdgezManagedEsp32FlashOptions extends EdgezManagedUsbFlashTunne
   baudRate?: EdgezEsp32FlashBaud;
   jobId?: string;
   connectTimeoutMs?: number;
+  /** Abort only when no flash status or log arrives for this long. Defaults to 90 seconds. */
+  flashInactivityTimeoutMs?: number;
+  /** Absolute safety ceiling for the complete flash operation. Defaults to 30 minutes. */
   flashTimeoutMs?: number;
   keepTunnelOpen?: boolean;
   onProgress?: (status: EdgezUsbFlashStatus) => void;
@@ -362,6 +365,9 @@ export interface EdgezManagedEsp32ReleaseFlashOptions extends EdgezManagedUsbFla
   baudRate?: EdgezEsp32FlashBaud;
   jobId?: string;
   connectTimeoutMs?: number;
+  /** Abort only when no flash status or log arrives for this long. Defaults to 90 seconds. */
+  flashInactivityTimeoutMs?: number;
+  /** Absolute safety ceiling for the complete flash operation. Defaults to 30 minutes. */
   flashTimeoutMs?: number;
   keepTunnelOpen?: boolean;
   onProgress?: (status: EdgezUsbFlashStatus) => void;
