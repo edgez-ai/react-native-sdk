@@ -210,6 +210,24 @@ The client selects only the fixed `nrf54l15-jlink` profile. Device name, SWD
 speed, reset sequence, and J-Link command script remain operator-controlled in
 the runtime profile file.
 
+An XIAO nRF54L15 exposed through its CMSIS-DAP probe uses the fixed OpenOCD
+profile instead:
+
+```ts
+await sdk.flashNrf54OpenOcdReleaseFirmware({
+  projectId: appwriteProjectId,
+  teamId: organizationId,
+  jwt: await account.createJWT().then(value => value.jwt),
+  busId: device.busId,
+  firmwareUrl: 'https://github.com/edgez-ai/example/releases/download/v1.0.0/live-stocking-nrf54l15-sense.hex',
+  sha256: '<GitHub release asset SHA-256>',
+  onProgress: status => console.log(status.state, status.message),
+});
+```
+
+The client can select only `nrf54l15-openocd`; the CMSIS-DAP interface, target
+configuration, memory-write enable, and reset command remain runtime-owned.
+
 The lower-level API remains available when an application needs to keep a
 tunnel open or manage several operations itself:
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.21
+
+- Add the fixed `nrf54l15-openocd` managed release-flash flow for CMSIS-DAP
+  probes while retaining the existing J-Link API.
+
 ## 0.1.19
 
 - Keep optional USB flash fields absent across the Android native bridge so

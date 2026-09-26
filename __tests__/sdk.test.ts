@@ -207,6 +207,38 @@ describe('EdgezMeshSdk packet API', () => {
     }
   });
 
+  it('runs the managed nRF54L15 OpenOCD release flash flow through completion', async () => {
+    const transport = new FakeTransport();
+    const sdk = new EdgezMeshSdk({transport});
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({url: 'wss://appwrite.edgez.ai/v1/usb-runtimes/team-1', token: 'token-1'}),
+    }) as typeof fetch;
+    const invoke = transport.invoke.bind(transport);
+    transport.invoke = jest.fn(async <T,>(method: string, arguments_?: Record<string, unknown>) => {
+      const result = await invoke<T>(method, arguments_);
+      if (method === 'startUsbFlashTunnel') queueMicrotask(() => transport.emit({type: 'usb', usbTunnelState: 'connected'}));
+      if (method === 'flashUsbReleaseFirmware') queueMicrotask(() => {
+        transport.emit({type: 'usb', usbFlash: {type: 'flash.status', jobId: 'nrf54-openocd-test', state: 'verified', size: 32768}});
+        transport.emit({type: 'usb', usbFlash: {type: 'flash.status', jobId: 'nrf54-openocd-test', state: 'complete'}});
+      });
+      return result;
+    });
+    const firmwareUrl = 'https://github.com/edgez-ai/template/releases/download/v1.0.0/live-stocking-nrf54l15-sense.hex';
+    try {
+      await expect(sdk.flashNrf54OpenOcdReleaseFirmware({
+        projectId: 'project-1', teamId: 'team-1', jwt: 'jwt-1', busId: '2-1',
+        firmwareUrl, sha256: 'e'.repeat(64), jobId: 'nrf54-openocd-test',
+      })).resolves.toMatchObject({jobId: 'nrf54-openocd-test', profile: 'nrf54l15-openocd', size: 32768, state: 'complete'});
+      expect(transport.calls).toEqual(expect.arrayContaining([
+        {method: 'flashUsbReleaseFirmware', arguments_: {jobId: 'nrf54-openocd-test', profile: 'nrf54l15-openocd', timeoutSeconds: 1800, firmwareUrl, sha256: 'e'.repeat(64)}},
+      ]));
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   it('initializes with Flutter-compatible fields', async () => {
     const transport = new FakeTransport();
     const sdk = new EdgezMeshSdk({transport, releaseCredential: {compatibility: '^0.5.0', releaseId: 'edgez-react-native-sdk@test', signature: new Uint8Array(64)}});

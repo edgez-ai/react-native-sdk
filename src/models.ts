@@ -385,7 +385,7 @@ export interface EdgezManagedEsp32ReleaseFlashOptions extends EdgezManagedUsbFla
   onProgress?: (status: EdgezUsbFlashStatus) => void;
 }
 
-export interface EdgezManagedNrf54JLinkReleaseFlashOptions extends EdgezManagedUsbFlashTunnelOptions {
+export interface EdgezManagedNrf54ReleaseFlashOptions extends EdgezManagedUsbFlashTunnelOptions {
   /** A versioned GitHub release asset containing an nRF54L15 Intel HEX image. */
   firmwareUrl: string;
   /** SHA-256 published in the GitHub release asset metadata. */
@@ -400,6 +400,9 @@ export interface EdgezManagedNrf54JLinkReleaseFlashOptions extends EdgezManagedU
   onProgress?: (status: EdgezUsbFlashStatus) => void;
 }
 
+/** @deprecated Use EdgezManagedNrf54ReleaseFlashOptions for new integrations. */
+export type EdgezManagedNrf54JLinkReleaseFlashOptions = EdgezManagedNrf54ReleaseFlashOptions;
+
 export interface EdgezUsbFlashResult {
   jobId: string;
   chip: EdgezEsp32Chip;
@@ -408,13 +411,18 @@ export interface EdgezUsbFlashResult {
   state: 'complete';
 }
 
-export interface EdgezNrf54JLinkFlashResult {
+export type EdgezNrf54FlashProfile = 'nrf54l15-jlink' | 'nrf54l15-openocd';
+
+export interface EdgezNrf54FlashResult<Profile extends EdgezNrf54FlashProfile = EdgezNrf54FlashProfile> {
   jobId: string;
-  profile: 'nrf54l15-jlink';
+  profile: Profile;
   size: number;
   sha256: string;
   state: 'complete';
 }
+
+export type EdgezNrf54JLinkFlashResult = EdgezNrf54FlashResult<'nrf54l15-jlink'>;
+export type EdgezNrf54OpenOcdFlashResult = EdgezNrf54FlashResult<'nrf54l15-openocd'>;
 
 export interface EdgezSdkReleaseCredential {
   compatibility: string;

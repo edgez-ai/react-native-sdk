@@ -22,10 +22,13 @@ import {
   type EdgezUsbFlashStatus,
   type EdgezUsbReleaseFlashJob,
   type EdgezManagedEsp32ReleaseFlashOptions,
-  type EdgezManagedNrf54JLinkReleaseFlashOptions,
+  type EdgezManagedNrf54ReleaseFlashOptions,
   type EdgezManagedEsp32FlashOptions,
   type EdgezUsbFlashResult,
   type EdgezNrf54JLinkFlashResult,
+  type EdgezNrf54OpenOcdFlashResult,
+  type EdgezNrf54FlashProfile,
+  type EdgezNrf54FlashResult,
   type EdgezVoiceChunk,
   type EdgezVoiceRecording,
   bytesFromNative,
@@ -393,7 +396,18 @@ export class EdgezMeshSdk {
     }
   }
 
-  async flashNrf54JLinkReleaseFirmware(options: EdgezManagedNrf54JLinkReleaseFlashOptions): Promise<EdgezNrf54JLinkFlashResult> {
+  async flashNrf54JLinkReleaseFirmware(options: EdgezManagedNrf54ReleaseFlashOptions): Promise<EdgezNrf54JLinkFlashResult> {
+    return this.flashNrf54ReleaseFirmware(options, 'nrf54l15-jlink');
+  }
+
+  async flashNrf54OpenOcdReleaseFirmware(options: EdgezManagedNrf54ReleaseFlashOptions): Promise<EdgezNrf54OpenOcdFlashResult> {
+    return this.flashNrf54ReleaseFirmware(options, 'nrf54l15-openocd');
+  }
+
+  private async flashNrf54ReleaseFirmware<Profile extends EdgezNrf54FlashProfile>(
+    options: EdgezManagedNrf54ReleaseFlashOptions,
+    profile: Profile,
+  ): Promise<EdgezNrf54FlashResult<Profile>> {
     const jobId = options.jobId ?? `nrf54-${Date.now().toString(36)}`;
     if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\/[^/]+\/[^/]+$/.test(options.firmwareUrl)) {
       throw new Error('Firmware URL must be a versioned GitHub release asset');
@@ -409,7 +423,7 @@ export class EdgezMeshSdk {
     let size = 0;
     try {
       const connected = deferred<void>();
-      const finished = deferred<EdgezNrf54JLinkFlashResult>();
+      const finished = deferred<EdgezNrf54FlashResult<Profile>>();
       let connectTimer: ReturnType<typeof setTimeout> | undefined;
       let connectPollTimer: ReturnType<typeof setInterval> | undefined;
       let flashTimer: ReturnType<typeof setTimeout> | undefined;
@@ -435,7 +449,7 @@ export class EdgezMeshSdk {
         if (status.state !== 'complete' && status.state !== 'failed' && status.state !== 'cancelled') refreshFlashInactivityTimer();
         if (status.size) size = status.size;
         if (status.state === 'complete') {
-          finished.resolve({jobId, profile: 'nrf54l15-jlink', size, sha256: options.sha256.toLowerCase(), state: 'complete'});
+          finished.resolve({jobId, profile, size, sha256: options.sha256.toLowerCase(), state: 'complete'});
         } else if (status.state === 'failed' || status.state === 'cancelled') {
           finished.reject(new Error(status.message || `nRF54L15 flash ${status.state}`));
         }
@@ -458,7 +472,7 @@ export class EdgezMeshSdk {
         clearInterval(connectPollTimer);
         await this.flashUsbReleaseFirmware({
           jobId,
-          profile: 'nrf54l15-jlink',
+          profile,
           timeoutSeconds: Math.ceil(serverFlashTimeoutMs / 1000),
           firmwareUrl: options.firmwareUrl,
           sha256: options.sha256,
