@@ -13,6 +13,7 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.File
 import java.io.FileInputStream
@@ -20,6 +21,8 @@ import java.io.InputStream
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 internal class UsbIpWebSocketBridge(
@@ -30,8 +33,12 @@ internal class UsbIpWebSocketBridge(
     companion object {
         private const val TAG = "EdgezReactNativeSdk"
         private const val MAX_QUEUED_BYTES = 4L * 1024L * 1024L
-        private const val MAX_PENDING_LOCAL_FRAMES = 128
+        private const val MAX_PENDING_LOCAL_FRAMES = 512
+        private const val MAX_PENDING_WEBSOCKET_FRAMES = 512
         private const val READ_BUFFER_BYTES = 64 * 1024
+        private const val MAX_WEBSOCKET_BATCH_BYTES = 256 * 1024
+        private const val WEBSOCKET_BATCH_DELAY_NANOS = 2_000_000L
+        private const val METRICS_INTERVAL_MS = 5_000L
         private const val FRAME_HEADER_BYTES = 8
         private const val FRAME_VERSION: Byte = 1
         private const val FRAME_ARTIFACT: Byte = 1
@@ -46,10 +53,28 @@ internal class UsbIpWebSocketBridge(
     private val closed = AtomicBoolean(false)
     private val creditLock = Object()
     private val localWriteQueue = ArrayBlockingQueue<ByteArray>(MAX_PENDING_LOCAL_FRAMES)
+    private val websocketSendQueue = ArrayBlockingQueue<ByteArray>(MAX_PENDING_WEBSOCKET_FRAMES)
+    private val remoteFramesReceived = AtomicLong()
+    private val remoteBytesReceived = AtomicLong()
+    private val localWriteCalls = AtomicLong()
+    private val localWriteBytes = AtomicLong()
+    private val localWriteNanos = AtomicLong()
+    private val localReadCalls = AtomicLong()
+    private val localReadBytes = AtomicLong()
+    private val websocketSendCalls = AtomicLong()
+    private val websocketSendChunks = AtomicLong()
+    private val websocketSendBytes = AtomicLong()
+    private val websocketSendNanos = AtomicLong()
+    private val websocketBackpressureNanos = AtomicLong()
+    private val localWriteQueueHighWater = AtomicInteger()
+    private val websocketSendQueueHighWater = AtomicInteger()
     private var uploadCredit = 0L
     @Volatile private var webSocket: WebSocket? = null
     @Volatile private var localSocket: LocalSocket? = null
     @Volatile private var localWriterThread: Thread? = null
+    @Volatile private var localReaderThread: Thread? = null
+    @Volatile private var websocketSenderThread: Thread? = null
+    @Volatile private var metricsThread: Thread? = null
 
     fun start(url: String, token: String, busId: String, socketName: String) {
         require(url.startsWith("wss://")) { "USB flash tunnel URL must use wss://" }
@@ -81,6 +106,7 @@ internal class UsbIpWebSocketBridge(
                     onSuccess = { local ->
                         Log.i(TAG, "USB flash bridge connected to local socket @$socketName")
                         eventListener("connected", null)
+                        startMetrics(local, socket)
                         pumpWebSocketToLocal(local, socket)
                         pumpLocalToWebSocket(local, socket)
                     },
@@ -98,6 +124,9 @@ internal class UsbIpWebSocketBridge(
                     check(kind == FRAME_USB_IP) { "Unexpected WebSocket frame type $kind" }
                     check(localSocket != null) { "USB/IP local socket is unavailable" }
                     check(localWriteQueue.offer(payload)) { "USB/IP local write queue is full" }
+                    remoteFramesReceived.incrementAndGet()
+                    remoteBytesReceived.addAndGet(payload.size.toLong())
+                    observeHighWater(localWriteQueueHighWater, localWriteQueue.size)
                 }.onFailure {
                     eventListener("failed", it.message)
                     close()
@@ -145,8 +174,12 @@ internal class UsbIpWebSocketBridge(
             runCatching {
                 while (!closed.get() && localSocket === local) {
                     val payload = localWriteQueue.poll(250, TimeUnit.MILLISECONDS) ?: continue
+                    val writeStarted = System.nanoTime()
                     local.outputStream.write(payload)
                     local.outputStream.flush()
+                    localWriteNanos.addAndGet(System.nanoTime() - writeStarted)
+                    localWriteCalls.incrementAndGet()
+                    localWriteBytes.addAndGet(payload.size.toLong())
                 }
             }.onFailure {
                 if (!closed.get() && localSocket === local) eventListener("failed", it.message)
@@ -156,31 +189,128 @@ internal class UsbIpWebSocketBridge(
     }
 
     private fun pumpLocalToWebSocket(local: LocalSocket, socket: WebSocket) {
-        thread(name = "edgez-usb-ip-wss", isDaemon = true) {
-            val buffer = ByteArray(READ_BUFFER_BYTES)
+        websocketSenderThread = thread(name = "edgez-usb-ip-wss-sender", isDaemon = true) {
             runCatching {
-                while (!closed.get()) {
+                while (!closed.get() && localSocket === local) {
+                    val first = websocketSendQueue.poll(250, TimeUnit.MILLISECONDS) ?: continue
+                    val chunks = ArrayList<ByteArray>(4)
+                    chunks.add(first)
+                    var totalBytes = first.size
+                    val deadline = System.nanoTime() + WEBSOCKET_BATCH_DELAY_NANOS
+                    while (chunks.size * READ_BUFFER_BYTES < MAX_WEBSOCKET_BATCH_BYTES) {
+                        val remaining = deadline - System.nanoTime()
+                        if (remaining <= 0) break
+                        val next = websocketSendQueue.poll(remaining, TimeUnit.NANOSECONDS) ?: break
+                        chunks.add(next)
+                        totalBytes += next.size
+                    }
+                    val backpressureStarted = System.nanoTime()
                     while (!closed.get() && socket.queueSize() >= MAX_QUEUED_BYTES) Thread.sleep(10)
-                    val count = local.inputStream.read(buffer)
-                    if (count < 0) break
-                    check(socket.send(encodeFrame(FRAME_USB_IP, buffer, count).toByteString())) { "WebSocket rejected USB/IP data" }
+                    websocketBackpressureNanos.addAndGet(System.nanoTime() - backpressureStarted)
+                    val payload = if (chunks.size == 1) first else ByteArrayOutputStream(totalBytes).use { batch ->
+                        chunks.forEach { batch.write(it) }
+                        batch.toByteArray()
+                    }
+                    val sendStarted = System.nanoTime()
+                    check(socket.send(encodeFrame(FRAME_USB_IP, payload, payload.size).toByteString())) {
+                        "WebSocket rejected USB/IP data"
+                    }
+                    websocketSendNanos.addAndGet(System.nanoTime() - sendStarted)
+                    websocketSendCalls.incrementAndGet()
+                    websocketSendChunks.addAndGet(chunks.size.toLong())
+                    websocketSendBytes.addAndGet(payload.size.toLong())
                 }
             }.onFailure {
-                if (!closed.get()) eventListener("failed", it.message)
+                if (!closed.get() && localSocket === local) eventListener("failed", it.message)
             }
-            if (!closed.get()) socket.close(1000, "USB/IP stream ended")
+            if (!closed.get() && localSocket === local) socket.close(1011, "USB/IP WebSocket send failed")
+        }
+
+        localReaderThread = thread(name = "edgez-usb-ip-wss-reader", isDaemon = true) {
+            val buffer = ByteArray(READ_BUFFER_BYTES)
+            runCatching {
+                while (!closed.get() && localSocket === local) {
+                    val count = local.inputStream.read(buffer)
+                    if (count < 0) break
+                    localReadCalls.incrementAndGet()
+                    localReadBytes.addAndGet(count.toLong())
+                    check(websocketSendQueue.offer(buffer.copyOf(count), 5, TimeUnit.SECONDS)) {
+                        "USB/IP WebSocket send queue is full"
+                    }
+                    observeHighWater(websocketSendQueueHighWater, websocketSendQueue.size)
+                }
+            }.onFailure {
+                if (!closed.get() && localSocket === local) eventListener("failed", it.message)
+            }
+            if (!closed.get() && localSocket === local) socket.close(1000, "USB/IP stream ended")
         }
     }
 
     private fun closeLocalSocket() {
+        metricsThread?.interrupt()
+        metricsThread = null
         localWriterThread?.interrupt()
         localWriterThread = null
+        localReaderThread?.interrupt()
+        localReaderThread = null
+        websocketSenderThread?.interrupt()
+        websocketSenderThread = null
         localWriteQueue.clear()
+        websocketSendQueue.clear()
         runCatching { localSocket?.shutdownInput() }
         runCatching { localSocket?.shutdownOutput() }
         runCatching { localSocket?.close() }
         localSocket = null
     }
+
+    private fun startMetrics(local: LocalSocket, socket: WebSocket) {
+        metricsThread?.interrupt()
+        metricsThread = thread(name = "edgez-usb-ip-metrics", isDaemon = true) {
+            while (!closed.get() && localSocket === local) {
+                try {
+                    Thread.sleep(METRICS_INTERVAL_MS)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                val seconds = METRICS_INTERVAL_MS / 1_000.0
+                val incomingFrames = remoteFramesReceived.getAndSet(0)
+                val incomingBytes = remoteBytesReceived.getAndSet(0)
+                val writes = localWriteCalls.getAndSet(0)
+                val writtenBytes = localWriteBytes.getAndSet(0)
+                val writeNanos = localWriteNanos.getAndSet(0)
+                val reads = localReadCalls.getAndSet(0)
+                val readBytes = localReadBytes.getAndSet(0)
+                val sends = websocketSendCalls.getAndSet(0)
+                val chunks = websocketSendChunks.getAndSet(0)
+                val sentBytes = websocketSendBytes.getAndSet(0)
+                val sendNanos = websocketSendNanos.getAndSet(0)
+                val backpressureNanos = websocketBackpressureNanos.getAndSet(0)
+                val incomingHighWater = localWriteQueueHighWater.getAndSet(localWriteQueue.size)
+                val outgoingHighWater = websocketSendQueueHighWater.getAndSet(websocketSendQueue.size)
+                Log.i(TAG, "USB/IP metrics " +
+                    "remoteToLocal=${formatRate(incomingBytes, seconds)} frames=$incomingFrames " +
+                    "localWrites=$writes/${formatRate(writtenBytes, seconds)} avgWriteMs=${formatMillis(writeNanos, writes)} " +
+                    "inQueue=${localWriteQueue.size}/$incomingHighWater " +
+                    "localToRemote=${formatRate(readBytes, seconds)} reads=$reads " +
+                    "wsSends=$sends chunks=$chunks batch=${formatRatio(chunks, sends)}x " +
+                    "sent=${formatRate(sentBytes, seconds)} avgSendMs=${formatMillis(sendNanos, sends)} " +
+                    "outQueue=${websocketSendQueue.size}/$outgoingHighWater " +
+                    "okhttpQueue=${socket.queueSize()} backpressureMs=${backpressureNanos / 1_000_000}")
+            }
+        }
+    }
+
+    private fun observeHighWater(highWater: AtomicInteger, value: Int) {
+        highWater.getAndUpdate { previous -> maxOf(previous, value) }
+    }
+
+    private fun formatRate(bytes: Long, seconds: Double): String = "%.1fKiB/s".format(bytes / 1024.0 / seconds)
+
+    private fun formatMillis(nanos: Long, count: Long): String =
+        if (count == 0L) "0.000" else "%.3f".format(nanos / 1_000_000.0 / count)
+
+    private fun formatRatio(total: Long, count: Long): String =
+        if (count == 0L) "0.00" else "%.2f".format(total.toDouble() / count)
 
     fun sendUsbEvent(event: String) {
         if (closed.get()) return

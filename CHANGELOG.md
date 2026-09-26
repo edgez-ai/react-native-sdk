@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.12
+
+- Queue Android USB/IP responses independently from WebSocket transmission and
+  coalesce up to 256 KiB of stream data for each WebSocket send without changing
+  USB/IP byte ordering.
+- Log five-second USB/IP transport metrics on Android, including directional
+  throughput, frame and batch counts, queue high-water marks, local write and
+  WebSocket send latency, OkHttp queue size, and backpressure time.
+
 ## 0.1.11
 
 - Keep an active ESP32 flash running while esptool continues to report progress,
