@@ -22,8 +22,10 @@ import {
   type EdgezUsbFlashStatus,
   type EdgezUsbReleaseFlashJob,
   type EdgezManagedEsp32ReleaseFlashOptions,
+  type EdgezManagedNrf54JLinkReleaseFlashOptions,
   type EdgezManagedEsp32FlashOptions,
   type EdgezUsbFlashResult,
+  type EdgezNrf54JLinkFlashResult,
   type EdgezVoiceChunk,
   type EdgezVoiceRecording,
   bytesFromNative,
@@ -378,6 +380,91 @@ export class EdgezMeshSdk {
         await this.flashUsbReleaseFirmware({jobId, profile: options.chip, baudRate: options.baudRate ?? 115200, ackWindow: options.ackWindow ?? 5, timeoutSeconds: Math.ceil(serverFlashTimeoutMs / 1000), esptoolConfig: options.esptoolConfig ?? 'high-latency', firmwareUrl: options.firmwareUrl, sha256: options.sha256});
         refreshFlashInactivityTimer();
         flashTimer = setTimeout(() => finished.reject(new Error('Timed out waiting for ESP32 flashing to finish')), flashTimeoutMs);
+        return await finished.promise;
+      } finally {
+        if (connectTimer) clearTimeout(connectTimer);
+        if (connectPollTimer) clearInterval(connectPollTimer);
+        if (flashTimer) clearTimeout(flashTimer);
+        if (flashInactivityTimer) clearTimeout(flashInactivityTimer);
+      }
+    } finally {
+      unsubscribe();
+      if (tunnelStarted && !options.keepTunnelOpen) await this.stopUsbIpServer().catch(() => undefined);
+    }
+  }
+
+  async flashNrf54JLinkReleaseFirmware(options: EdgezManagedNrf54JLinkReleaseFlashOptions): Promise<EdgezNrf54JLinkFlashResult> {
+    const jobId = options.jobId ?? `nrf54-${Date.now().toString(36)}`;
+    if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\/[^/]+\/[^/]+$/.test(options.firmwareUrl)) {
+      throw new Error('Firmware URL must be a versioned GitHub release asset');
+    }
+    if (!/^[a-fA-F0-9]{64}$/.test(options.sha256)) throw new Error('Firmware SHA-256 is invalid');
+    const connectTimeoutMs = options.connectTimeoutMs ?? 120_000;
+    const serverFlashTimeoutMs = options.flashTimeoutMs ?? 30 * 60_000;
+    if (serverFlashTimeoutMs < 60_000 || serverFlashTimeoutMs > 30 * 60_000) throw new Error('nRF54L15 flash timeout must be between 1 and 30 minutes');
+    const flashTimeoutMs = serverFlashTimeoutMs + 30_000;
+    const flashInactivityTimeoutMs = options.flashInactivityTimeoutMs ?? 90_000;
+    let tunnelStarted = false;
+    let unsubscribe = () => {};
+    let size = 0;
+    try {
+      const connected = deferred<void>();
+      const finished = deferred<EdgezNrf54JLinkFlashResult>();
+      let connectTimer: ReturnType<typeof setTimeout> | undefined;
+      let connectPollTimer: ReturnType<typeof setInterval> | undefined;
+      let flashTimer: ReturnType<typeof setTimeout> | undefined;
+      let flashInactivityTimer: ReturnType<typeof setTimeout> | undefined;
+      const refreshFlashInactivityTimer = () => {
+        if (flashInactivityTimeoutMs <= 0 || finished.settled()) return;
+        if (flashInactivityTimer) clearTimeout(flashInactivityTimer);
+        flashInactivityTimer = setTimeout(
+          () => finished.reject(new Error(`No nRF54L15 flash progress received for ${Math.round(flashInactivityTimeoutMs / 1000)} seconds`)),
+          flashInactivityTimeoutMs,
+        );
+      };
+      unsubscribe = this.subscribe(event => {
+        if (event.type !== 'usb') return;
+        if (event.usbTunnelState === 'connected') connected.resolve(undefined);
+        if (event.usbTunnelState === 'failed' || event.usbTunnelState === 'disconnected') {
+          const error = new Error(event.usbTunnelMessage || `USB flash tunnel ${event.usbTunnelState}`);
+          if (!connected.settled()) connected.reject(error);
+          else if (!finished.settled()) finished.reject(error);
+        }
+        const status = event.usbFlash;
+        if (!status || status.jobId !== jobId) return;
+        if (status.state !== 'complete' && status.state !== 'failed' && status.state !== 'cancelled') refreshFlashInactivityTimer();
+        if (status.size) size = status.size;
+        if (status.state === 'complete') {
+          finished.resolve({jobId, profile: 'nrf54-jlink', size, sha256: options.sha256.toLowerCase(), state: 'complete'});
+        } else if (status.state === 'failed' || status.state === 'cancelled') {
+          finished.reject(new Error(status.message || `nRF54L15 flash ${status.state}`));
+        }
+        try { options.onProgress?.(status); } catch { /* UI callbacks cannot interrupt flashing. */ }
+      });
+      try {
+        await this.startManagedUsbFlashTunnel(options);
+        tunnelStarted = true;
+        connectTimer = setTimeout(() => connected.reject(new Error('Timed out connecting to the USB flash runtime')), connectTimeoutMs);
+        connectPollTimer = setInterval(() => {
+          void this.getUsbIpServerStatus().then(status => {
+            if (status.tunnelState === 'connected' || status.tunnelState === 'message') connected.resolve(undefined);
+            else if (status.tunnelState === 'failed' || status.tunnelState === 'disconnected') {
+              connected.reject(new Error(`USB flash tunnel ${status.tunnelState}`));
+            }
+          }).catch(() => undefined);
+        }, 250);
+        await connected.promise;
+        clearTimeout(connectTimer);
+        clearInterval(connectPollTimer);
+        await this.flashUsbReleaseFirmware({
+          jobId,
+          profile: 'nrf54-jlink',
+          timeoutSeconds: Math.ceil(serverFlashTimeoutMs / 1000),
+          firmwareUrl: options.firmwareUrl,
+          sha256: options.sha256,
+        });
+        refreshFlashInactivityTimer();
+        flashTimer = setTimeout(() => finished.reject(new Error('Timed out waiting for nRF54L15 flashing to finish')), flashTimeoutMs);
         return await finished.promise;
       } finally {
         if (connectTimer) clearTimeout(connectTimer);

@@ -191,6 +191,25 @@ This sends only the URL and digest over the control channel. The runtime
 downloads the image, enforces its size limit, verifies SHA-256, and then flashes
 it through the phone's USB/IP connection.
 
+An nRF54L15 + HT-HC01 release HEX can use the same managed flow with the
+server-controlled SEGGER profile:
+
+```ts
+await sdk.flashNrf54JLinkReleaseFirmware({
+  projectId: appwriteProjectId,
+  teamId: organizationId,
+  jwt: await account.createJWT().then(value => value.jwt),
+  busId: device.busId,
+  firmwareUrl: 'https://github.com/edgez-ai/example/releases/download/v1.0.0/live-stocking-hc01.hex',
+  sha256: '<GitHub release asset SHA-256>',
+  onProgress: status => console.log(status.state, status.message),
+});
+```
+
+The client selects only the fixed `nrf54-jlink` profile. Device name, SWD
+speed, reset sequence, and J-Link command script remain operator-controlled in
+the runtime profile file.
+
 The lower-level API remains available when an application needs to keep a
 tunnel open or manage several operations itself:
 

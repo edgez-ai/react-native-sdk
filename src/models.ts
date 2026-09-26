@@ -385,9 +385,32 @@ export interface EdgezManagedEsp32ReleaseFlashOptions extends EdgezManagedUsbFla
   onProgress?: (status: EdgezUsbFlashStatus) => void;
 }
 
+export interface EdgezManagedNrf54JLinkReleaseFlashOptions extends EdgezManagedUsbFlashTunnelOptions {
+  /** A versioned GitHub release asset containing an nRF54L15 Intel HEX image. */
+  firmwareUrl: string;
+  /** SHA-256 published in the GitHub release asset metadata. */
+  sha256: string;
+  jobId?: string;
+  connectTimeoutMs?: number;
+  /** Abort only when no flash status or log arrives for this long. Defaults to 90 seconds. */
+  flashInactivityTimeoutMs?: number;
+  /** Absolute safety ceiling for the complete flash operation. Defaults to 30 minutes. */
+  flashTimeoutMs?: number;
+  keepTunnelOpen?: boolean;
+  onProgress?: (status: EdgezUsbFlashStatus) => void;
+}
+
 export interface EdgezUsbFlashResult {
   jobId: string;
   chip: EdgezEsp32Chip;
+  size: number;
+  sha256: string;
+  state: 'complete';
+}
+
+export interface EdgezNrf54JLinkFlashResult {
+  jobId: string;
+  profile: 'nrf54-jlink';
   size: number;
   sha256: string;
   state: 'complete';

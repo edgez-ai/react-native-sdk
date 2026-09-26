@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.17
+
+- Add a managed nRF54L15 J-Link release flashing flow using the runtime-owned
+  `nrf54-jlink` profile and SHA-256-verified GitHub release assets.
+
 ## 0.1.16
 
 - Add a check-only app bundle update API so applications can ask the user
