@@ -283,7 +283,7 @@ export class EdgezMeshSdk {
         await connected.promise;
         clearTimeout(connectTimer);
         clearInterval(connectPollTimer);
-        await this.flashUsbFirmware({jobId, profile: options.chip, ...firmware});
+        await this.flashUsbFirmware({jobId, profile: options.chip, baudRate: options.baudRate ?? 115200, ...firmware});
         flashTimer = setTimeout(() => finished.reject(new Error('Timed out waiting for ESP32 flashing to finish')), flashTimeoutMs);
         return await finished.promise;
       } finally {
@@ -347,7 +347,7 @@ export class EdgezMeshSdk {
         await connected.promise;
         clearTimeout(connectTimer);
         clearInterval(connectPollTimer);
-        await this.flashUsbReleaseFirmware({jobId, profile: options.chip, firmwareUrl: options.firmwareUrl, sha256: options.sha256});
+        await this.flashUsbReleaseFirmware({jobId, profile: options.chip, baudRate: options.baudRate ?? 115200, firmwareUrl: options.firmwareUrl, sha256: options.sha256});
         flashTimer = setTimeout(() => finished.reject(new Error('Timed out waiting for ESP32 flashing to finish')), flashTimeoutMs);
         return await finished.promise;
       } finally {

@@ -305,6 +305,7 @@ export interface EdgezUsbFlashSession {
 export interface EdgezUsbFlashJob {
   jobId: string;
   profile: string;
+  baudRate?: EdgezEsp32FlashBaud;
   firmwareUri: string;
   size: number;
   sha256: string;
@@ -313,11 +314,13 @@ export interface EdgezUsbFlashJob {
 export interface EdgezUsbReleaseFlashJob {
   jobId: string;
   profile: string;
+  baudRate?: EdgezEsp32FlashBaud;
   firmwareUrl: string;
   sha256: string;
 }
 
 export type EdgezEsp32Chip = 'esp32' | 'esp32s3' | 'esp32c3';
+export type EdgezEsp32FlashBaud = 115200 | 230400 | 460800 | 921600;
 export type EdgezUsbFlashState = 'downloading' | 'uploading' | 'verified' | 'flashing' | 'complete' | 'failed' | 'cancelled';
 
 export interface EdgezUsbFirmwareInfo {
@@ -340,6 +343,8 @@ export interface EdgezManagedEsp32FlashOptions extends EdgezManagedUsbFlashTunne
   /** A full/merged flash image. The server writes this image at address 0x0. */
   firmwareUri: string;
   chip: EdgezEsp32Chip;
+  /** Per-job esptool baud rate. The runtime defaults to 115200 when omitted. */
+  baudRate?: EdgezEsp32FlashBaud;
   jobId?: string;
   connectTimeoutMs?: number;
   flashTimeoutMs?: number;
@@ -353,6 +358,8 @@ export interface EdgezManagedEsp32ReleaseFlashOptions extends EdgezManagedUsbFla
   /** SHA-256 published in the GitHub release asset metadata. */
   sha256: string;
   chip: EdgezEsp32Chip;
+  /** Per-job esptool baud rate. The runtime defaults to 115200 when omitted. */
+  baudRate?: EdgezEsp32FlashBaud;
   jobId?: string;
   connectTimeoutMs?: number;
   flashTimeoutMs?: number;

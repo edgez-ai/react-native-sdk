@@ -77,7 +77,7 @@ describe('EdgezMeshSdk packet API', () => {
     const sdk = new EdgezMeshSdk({transport});
     const job = {
       jobId: 'flash-1', profile: 'esp32s3', firmwareUri: 'content://firmware/app.bin',
-      size: 1024, sha256: 'a'.repeat(64),
+      baudRate: 460800 as const, size: 1024, sha256: 'a'.repeat(64),
     };
     await sdk.flashUsbFirmware(job);
     await sdk.cancelUsbFlash(job.jobId);
@@ -92,6 +92,7 @@ describe('EdgezMeshSdk packet API', () => {
     const sdk = new EdgezMeshSdk({transport});
     const job = {
       jobId: 'release-1', profile: 'esp32s3',
+      baudRate: 460800 as const,
       firmwareUrl: 'https://github.com/edgez-ai/template/releases/download/v1.0.0/firmware.bin',
       sha256: 'c'.repeat(64),
     };
@@ -128,12 +129,12 @@ describe('EdgezMeshSdk packet API', () => {
     try {
       await expect(sdk.flashEsp32Firmware({
         projectId: 'project-1', teamId: 'team-1', jwt: 'jwt-1', busId: '1-2',
-        chip: 'esp32s3', firmwareUri: 'content://firmware/merged.bin', jobId: 'esp32-test',
+        chip: 'esp32s3', baudRate: 460800, firmwareUri: 'content://firmware/merged.bin', jobId: 'esp32-test',
         onProgress: status => progress.push(status.state),
       })).resolves.toMatchObject({jobId: 'esp32-test', chip: 'esp32s3', state: 'complete', size: 4096});
       expect(progress).toEqual(['uploading', 'complete']);
       expect(transport.calls).toEqual(expect.arrayContaining([
-        {method: 'flashUsbFirmware', arguments_: {jobId: 'esp32-test', profile: 'esp32s3', firmwareUri: 'content://firmware/merged.bin', size: 4096, sha256: 'b'.repeat(64)}},
+        {method: 'flashUsbFirmware', arguments_: {jobId: 'esp32-test', profile: 'esp32s3', baudRate: 460800, firmwareUri: 'content://firmware/merged.bin', size: 4096, sha256: 'b'.repeat(64)}},
         {method: 'stopUsbIpServer', arguments_: undefined},
       ]));
     } finally {
@@ -163,11 +164,11 @@ describe('EdgezMeshSdk packet API', () => {
     const firmwareUrl = 'https://github.com/edgez-ai/template/releases/download/v1.0.0/firmware.bin';
     try {
       await expect(sdk.flashEsp32ReleaseFirmware({
-        projectId: 'project-1', teamId: 'team-1', jwt: 'jwt-1', busId: '1-2', chip: 'esp32s3',
+        projectId: 'project-1', teamId: 'team-1', jwt: 'jwt-1', busId: '1-2', chip: 'esp32s3', baudRate: 460800,
         firmwareUrl, sha256: 'c'.repeat(64), jobId: 'release-test',
       })).resolves.toMatchObject({jobId: 'release-test', size: 8192, sha256: 'c'.repeat(64), state: 'complete'});
       expect(transport.calls).toEqual(expect.arrayContaining([
-        {method: 'flashUsbReleaseFirmware', arguments_: {jobId: 'release-test', profile: 'esp32s3', firmwareUrl, sha256: 'c'.repeat(64)}},
+        {method: 'flashUsbReleaseFirmware', arguments_: {jobId: 'release-test', profile: 'esp32s3', baudRate: 460800, firmwareUrl, sha256: 'c'.repeat(64)}},
       ]));
     } finally {
       global.fetch = originalFetch;

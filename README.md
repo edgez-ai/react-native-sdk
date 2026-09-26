@@ -142,6 +142,7 @@ await sdk.flashEsp32ReleaseFirmware({
   jwt: await account.createJWT().then(value => value.jwt),
   busId: device.busId,
   chip: 'esp32s3',
+  baudRate: 460800,
   firmwareUrl: 'https://github.com/edgez-ai/example/releases/download/v1.0.0/firmware.bin',
   sha256: '<GitHub release asset SHA-256>',
   onProgress: status => console.log(status.state, status.message),
@@ -168,6 +169,7 @@ const status = await sdk.startManagedUsbFlashTunnel({
 await sdk.flashUsbFirmware({
   jobId: 'flash-20260925-1',
   profile: 'esp32s3',
+  baudRate: 460800,
   firmwareUri: 'content://com.example.files/firmware.bin',
   size: 1048576,
   sha256: '<64 lowercase hex characters>',

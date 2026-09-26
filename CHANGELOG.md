@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.10
+
+- Let Android apps select 115200, 230400, 460800, or 921600 baud for each
+  ESP32 flash job and carry the validated choice to the remote runtime.
+
 ## 0.1.9
 
 - Handle explicit ESP32 reset commands from the flash runtime and execute each

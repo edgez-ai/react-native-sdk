@@ -197,7 +197,8 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
             val firmwareUri = arguments.getString("firmwareUri").orEmpty()
             val size = arguments.getDouble("size").toLong()
             val sha256 = arguments.getString("sha256").orEmpty()
-            tunnel.startFlash(jobId, profile, firmwareUri, size, sha256)
+            val baudRate = if (arguments.hasKey("baudRate") && !arguments.isNull("baudRate")) arguments.getDouble("baudRate").toInt() else 115200
+            tunnel.startFlash(jobId, profile, baudRate, firmwareUri, size, sha256)
         }.fold({ promise.resolve(null) }, { promise.reject("usb_flash_start_failed", it.message, it) })
     }
 
@@ -209,6 +210,7 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
             tunnel.startReleaseFlash(
                 arguments.getString("jobId").orEmpty(),
                 arguments.getString("profile").orEmpty(),
+                if (arguments.hasKey("baudRate") && !arguments.isNull("baudRate")) arguments.getDouble("baudRate").toInt() else 115200,
                 arguments.getString("firmwareUrl").orEmpty(),
                 arguments.getString("sha256").orEmpty(),
             )
