@@ -17,6 +17,7 @@ import java.io.Closeable
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
@@ -29,6 +30,7 @@ internal class UsbIpWebSocketBridge(
     companion object {
         private const val TAG = "EdgezReactNativeSdk"
         private const val MAX_QUEUED_BYTES = 4L * 1024L * 1024L
+        private const val MAX_PENDING_LOCAL_FRAMES = 128
         private const val READ_BUFFER_BYTES = 64 * 1024
         private const val FRAME_HEADER_BYTES = 8
         private const val FRAME_VERSION: Byte = 1
@@ -42,11 +44,12 @@ internal class UsbIpWebSocketBridge(
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
     private val closed = AtomicBoolean(false)
-    private val writeLock = Any()
     private val creditLock = Object()
+    private val localWriteQueue = ArrayBlockingQueue<ByteArray>(MAX_PENDING_LOCAL_FRAMES)
     private var uploadCredit = 0L
     @Volatile private var webSocket: WebSocket? = null
     @Volatile private var localSocket: LocalSocket? = null
+    @Volatile private var localWriterThread: Thread? = null
 
     fun start(url: String, token: String, busId: String, socketName: String) {
         require(url.startsWith("wss://")) { "USB flash tunnel URL must use wss://" }
@@ -78,6 +81,7 @@ internal class UsbIpWebSocketBridge(
                     onSuccess = { local ->
                         Log.i(TAG, "USB flash bridge connected to local socket @$socketName")
                         eventListener("connected", null)
+                        pumpWebSocketToLocal(local, socket)
                         pumpLocalToWebSocket(local, socket)
                     },
                     onFailure = { error ->
@@ -89,14 +93,11 @@ internal class UsbIpWebSocketBridge(
             }
 
             override fun onMessage(socket: WebSocket, bytes: ByteString) {
-                val local = localSocket ?: return
                 runCatching {
                     val (kind, payload) = decodeFrame(bytes.toByteArray())
                     check(kind == FRAME_USB_IP) { "Unexpected WebSocket frame type $kind" }
-                    synchronized(writeLock) {
-                        local.outputStream.write(payload)
-                        local.outputStream.flush()
-                    }
+                    check(localSocket != null) { "USB/IP local socket is unavailable" }
+                    check(localWriteQueue.offer(payload)) { "USB/IP local write queue is full" }
                 }.onFailure {
                     eventListener("failed", it.message)
                     close()
@@ -139,6 +140,21 @@ internal class UsbIpWebSocketBridge(
         })
     }
 
+    private fun pumpWebSocketToLocal(local: LocalSocket, socket: WebSocket) {
+        localWriterThread = thread(name = "edgez-wss-usb-ip", isDaemon = true) {
+            runCatching {
+                while (!closed.get() && localSocket === local) {
+                    val payload = localWriteQueue.poll(250, TimeUnit.MILLISECONDS) ?: continue
+                    local.outputStream.write(payload)
+                    local.outputStream.flush()
+                }
+            }.onFailure {
+                if (!closed.get() && localSocket === local) eventListener("failed", it.message)
+            }
+            if (!closed.get() && localSocket === local) socket.close(1011, "USB/IP local write failed")
+        }
+    }
+
     private fun pumpLocalToWebSocket(local: LocalSocket, socket: WebSocket) {
         thread(name = "edgez-usb-ip-wss", isDaemon = true) {
             val buffer = ByteArray(READ_BUFFER_BYTES)
@@ -157,6 +173,9 @@ internal class UsbIpWebSocketBridge(
     }
 
     private fun closeLocalSocket() {
+        localWriterThread?.interrupt()
+        localWriterThread = null
+        localWriteQueue.clear()
         runCatching { localSocket?.shutdownInput() }
         runCatching { localSocket?.shutdownOutput() }
         runCatching { localSocket?.close() }
@@ -168,12 +187,15 @@ internal class UsbIpWebSocketBridge(
         webSocket?.send(JSONObject(mapOf("type" to "usb-event", "event" to event)).toString())
     }
 
-    fun startFlash(jobId: String, profile: String, baudRate: Int, firmwareUri: String, size: Long, sha256: String) {
+    fun startFlash(jobId: String, profile: String, baudRate: Int, ackWindow: Int, timeoutSeconds: Int, esptoolConfig: String, firmwareUri: String, size: Long, sha256: String) {
         require(jobId.matches(Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"))) { "Invalid flash job ID" }
         require(profile.matches(Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"))) { "Invalid flash profile" }
         require(size > 0) { "Firmware size must be positive" }
         require(sha256.matches(Regex("^[a-fA-F0-9]{64}$"))) { "Firmware SHA-256 is invalid" }
         require(baudRate in setOf(115200, 230400, 460800, 921600)) { "Unsupported ESP flash baud rate" }
+        require(ackWindow in 1..8) { "ESP flash ACK window must be between 1 and 8" }
+        require(timeoutSeconds in 60..1800) { "ESP flash timeout must be between 1 and 30 minutes" }
+        require(esptoolConfig in setOf("standard", "high-latency")) { "Unsupported esptool configuration preset" }
         val socket = webSocket ?: error("USB flash tunnel is not running")
         synchronized(creditLock) { uploadCredit = 0 }
         check(socket.send(JSONObject(mapOf(
@@ -181,6 +203,9 @@ internal class UsbIpWebSocketBridge(
             "jobId" to jobId,
             "profile" to profile,
             "baudRate" to baudRate,
+            "ackWindow" to ackWindow,
+            "timeoutSeconds" to timeoutSeconds,
+            "esptoolConfig" to esptoolConfig,
             "size" to size,
             "sha256" to sha256.lowercase(),
         )).toString())) { "WebSocket rejected flash.start" }
@@ -198,7 +223,7 @@ internal class UsbIpWebSocketBridge(
         }
     }
 
-    fun startReleaseFlash(jobId: String, profile: String, baudRate: Int, firmwareUrl: String, sha256: String) {
+    fun startReleaseFlash(jobId: String, profile: String, baudRate: Int, ackWindow: Int, timeoutSeconds: Int, esptoolConfig: String, firmwareUrl: String, sha256: String) {
         require(jobId.matches(Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"))) { "Invalid flash job ID" }
         require(profile.matches(Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"))) { "Invalid flash profile" }
         require(firmwareUrl.matches(Regex("^https://github\\.com/[^/]+/[^/]+/releases/download/[^/]+/[^/]+$"))) {
@@ -206,12 +231,18 @@ internal class UsbIpWebSocketBridge(
         }
         require(sha256.matches(Regex("^[a-fA-F0-9]{64}$"))) { "Firmware SHA-256 is invalid" }
         require(baudRate in setOf(115200, 230400, 460800, 921600)) { "Unsupported ESP flash baud rate" }
+        require(ackWindow in 1..8) { "ESP flash ACK window must be between 1 and 8" }
+        require(timeoutSeconds in 60..1800) { "ESP flash timeout must be between 1 and 30 minutes" }
+        require(esptoolConfig in setOf("standard", "high-latency")) { "Unsupported esptool configuration preset" }
         val socket = webSocket ?: error("USB flash tunnel is not running")
         check(socket.send(JSONObject(mapOf(
             "type" to "flash.start",
             "jobId" to jobId,
             "profile" to profile,
             "baudRate" to baudRate,
+            "ackWindow" to ackWindow,
+            "timeoutSeconds" to timeoutSeconds,
+            "esptoolConfig" to esptoolConfig,
             "firmwareUrl" to firmwareUrl,
             "sha256" to sha256.lowercase(),
         )).toString())) { "WebSocket rejected flash.start" }

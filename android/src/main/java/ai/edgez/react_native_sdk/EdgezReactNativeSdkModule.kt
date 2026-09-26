@@ -198,7 +198,10 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
             val size = arguments.getDouble("size").toLong()
             val sha256 = arguments.getString("sha256").orEmpty()
             val baudRate = if (arguments.hasKey("baudRate") && !arguments.isNull("baudRate")) arguments.getDouble("baudRate").toInt() else 115200
-            tunnel.startFlash(jobId, profile, baudRate, firmwareUri, size, sha256)
+            val ackWindow = if (arguments.hasKey("ackWindow") && !arguments.isNull("ackWindow")) arguments.getDouble("ackWindow").toInt() else 5
+            val timeoutSeconds = if (arguments.hasKey("timeoutSeconds") && !arguments.isNull("timeoutSeconds")) arguments.getDouble("timeoutSeconds").toInt() else 1800
+            val esptoolConfig = if (arguments.hasKey("esptoolConfig") && !arguments.isNull("esptoolConfig")) arguments.getString("esptoolConfig").orEmpty() else "high-latency"
+            tunnel.startFlash(jobId, profile, baudRate, ackWindow, timeoutSeconds, esptoolConfig, firmwareUri, size, sha256)
         }.fold({ promise.resolve(null) }, { promise.reject("usb_flash_start_failed", it.message, it) })
     }
 
@@ -211,6 +214,9 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
                 arguments.getString("jobId").orEmpty(),
                 arguments.getString("profile").orEmpty(),
                 if (arguments.hasKey("baudRate") && !arguments.isNull("baudRate")) arguments.getDouble("baudRate").toInt() else 115200,
+                if (arguments.hasKey("ackWindow") && !arguments.isNull("ackWindow")) arguments.getDouble("ackWindow").toInt() else 5,
+                if (arguments.hasKey("timeoutSeconds") && !arguments.isNull("timeoutSeconds")) arguments.getDouble("timeoutSeconds").toInt() else 1800,
+                if (arguments.hasKey("esptoolConfig") && !arguments.isNull("esptoolConfig")) arguments.getString("esptoolConfig").orEmpty() else "high-latency",
                 arguments.getString("firmwareUrl").orEmpty(),
                 arguments.getString("sha256").orEmpty(),
             )

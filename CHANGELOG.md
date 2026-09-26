@@ -5,6 +5,8 @@
 - Keep an active ESP32 flash running while esptool continues to report progress,
   using a 90-second inactivity watchdog instead of terminating every job at the
   previous ten-minute deadline. Retain a 30-minute absolute safety ceiling.
+- Move WebSocket-to-USB writes onto an ordered background queue so device writes
+  cannot block USB ACK reads or asynchronous WebSocket ACK transmission.
 
 ## 0.1.10
 

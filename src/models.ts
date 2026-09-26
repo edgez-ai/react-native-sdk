@@ -306,6 +306,9 @@ export interface EdgezUsbFlashJob {
   jobId: string;
   profile: string;
   baudRate?: EdgezEsp32FlashBaud;
+  ackWindow?: EdgezEsp32FlashAckWindow;
+  timeoutSeconds?: number;
+  esptoolConfig?: EdgezEsptoolConfig;
   firmwareUri: string;
   size: number;
   sha256: string;
@@ -315,12 +318,17 @@ export interface EdgezUsbReleaseFlashJob {
   jobId: string;
   profile: string;
   baudRate?: EdgezEsp32FlashBaud;
+  ackWindow?: EdgezEsp32FlashAckWindow;
+  timeoutSeconds?: number;
+  esptoolConfig?: EdgezEsptoolConfig;
   firmwareUrl: string;
   sha256: string;
 }
 
 export type EdgezEsp32Chip = 'esp32' | 'esp32s3' | 'esp32c3';
 export type EdgezEsp32FlashBaud = 115200 | 230400 | 460800 | 921600;
+export type EdgezEsp32FlashAckWindow = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+export type EdgezEsptoolConfig = 'standard' | 'high-latency';
 export type EdgezUsbFlashState = 'downloading' | 'uploading' | 'verified' | 'flashing' | 'complete' | 'failed' | 'cancelled';
 
 export interface EdgezUsbFirmwareInfo {
@@ -345,6 +353,8 @@ export interface EdgezManagedEsp32FlashOptions extends EdgezManagedUsbFlashTunne
   chip: EdgezEsp32Chip;
   /** Per-job esptool baud rate. The runtime defaults to 115200 when omitted. */
   baudRate?: EdgezEsp32FlashBaud;
+  ackWindow?: EdgezEsp32FlashAckWindow;
+  esptoolConfig?: EdgezEsptoolConfig;
   jobId?: string;
   connectTimeoutMs?: number;
   /** Abort only when no flash status or log arrives for this long. Defaults to 90 seconds. */
@@ -363,6 +373,8 @@ export interface EdgezManagedEsp32ReleaseFlashOptions extends EdgezManagedUsbFla
   chip: EdgezEsp32Chip;
   /** Per-job esptool baud rate. The runtime defaults to 115200 when omitted. */
   baudRate?: EdgezEsp32FlashBaud;
+  ackWindow?: EdgezEsp32FlashAckWindow;
+  esptoolConfig?: EdgezEsptoolConfig;
   jobId?: string;
   connectTimeoutMs?: number;
   /** Abort only when no flash status or log arrives for this long. Defaults to 90 seconds. */

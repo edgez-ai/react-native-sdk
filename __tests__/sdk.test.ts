@@ -134,7 +134,7 @@ describe('EdgezMeshSdk packet API', () => {
       })).resolves.toMatchObject({jobId: 'esp32-test', chip: 'esp32s3', state: 'complete', size: 4096});
       expect(progress).toEqual(['uploading', 'complete']);
       expect(transport.calls).toEqual(expect.arrayContaining([
-        {method: 'flashUsbFirmware', arguments_: {jobId: 'esp32-test', profile: 'esp32s3', baudRate: 460800, firmwareUri: 'content://firmware/merged.bin', size: 4096, sha256: 'b'.repeat(64)}},
+        {method: 'flashUsbFirmware', arguments_: {jobId: 'esp32-test', profile: 'esp32s3', baudRate: 460800, ackWindow: 5, timeoutSeconds: 1800, esptoolConfig: 'high-latency', firmwareUri: 'content://firmware/merged.bin', size: 4096, sha256: 'b'.repeat(64)}},
         {method: 'stopUsbIpServer', arguments_: undefined},
       ]));
     } finally {
@@ -168,7 +168,7 @@ describe('EdgezMeshSdk packet API', () => {
         firmwareUrl, sha256: 'c'.repeat(64), jobId: 'release-test',
       })).resolves.toMatchObject({jobId: 'release-test', size: 8192, sha256: 'c'.repeat(64), state: 'complete'});
       expect(transport.calls).toEqual(expect.arrayContaining([
-        {method: 'flashUsbReleaseFirmware', arguments_: {jobId: 'release-test', profile: 'esp32s3', baudRate: 460800, firmwareUrl, sha256: 'c'.repeat(64)}},
+        {method: 'flashUsbReleaseFirmware', arguments_: {jobId: 'release-test', profile: 'esp32s3', baudRate: 460800, ackWindow: 5, timeoutSeconds: 1800, esptoolConfig: 'high-latency', firmwareUrl, sha256: 'c'.repeat(64)}},
       ]));
     } finally {
       global.fetch = originalFetch;

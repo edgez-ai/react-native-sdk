@@ -240,7 +240,9 @@ export class EdgezMeshSdk {
   async flashEsp32Firmware(options: EdgezManagedEsp32FlashOptions): Promise<EdgezUsbFlashResult> {
     const jobId = options.jobId ?? `esp32-${Date.now().toString(36)}`;
     const connectTimeoutMs = options.connectTimeoutMs ?? 120_000;
-    const flashTimeoutMs = options.flashTimeoutMs ?? 30 * 60_000;
+    const serverFlashTimeoutMs = options.flashTimeoutMs ?? 30 * 60_000;
+    if (serverFlashTimeoutMs < 60_000 || serverFlashTimeoutMs > 30 * 60_000) throw new Error('ESP32 flash timeout must be between 1 and 30 minutes');
+    const flashTimeoutMs = serverFlashTimeoutMs + 30_000;
     const flashInactivityTimeoutMs = options.flashInactivityTimeoutMs ?? 90_000;
     const firmware = await this.inspectUsbFirmware(options.firmwareUri);
     let tunnelStarted = false;
@@ -294,7 +296,7 @@ export class EdgezMeshSdk {
         await connected.promise;
         clearTimeout(connectTimer);
         clearInterval(connectPollTimer);
-        await this.flashUsbFirmware({jobId, profile: options.chip, baudRate: options.baudRate ?? 115200, ...firmware});
+        await this.flashUsbFirmware({jobId, profile: options.chip, baudRate: options.baudRate ?? 115200, ackWindow: options.ackWindow ?? 5, timeoutSeconds: Math.ceil(serverFlashTimeoutMs / 1000), esptoolConfig: options.esptoolConfig ?? 'high-latency', ...firmware});
         refreshFlashInactivityTimer();
         flashTimer = setTimeout(() => finished.reject(new Error('Timed out waiting for ESP32 flashing to finish')), flashTimeoutMs);
         return await finished.promise;
@@ -317,7 +319,9 @@ export class EdgezMeshSdk {
     }
     if (!/^[a-fA-F0-9]{64}$/.test(options.sha256)) throw new Error('Firmware SHA-256 is invalid');
     const connectTimeoutMs = options.connectTimeoutMs ?? 120_000;
-    const flashTimeoutMs = options.flashTimeoutMs ?? 30 * 60_000;
+    const serverFlashTimeoutMs = options.flashTimeoutMs ?? 30 * 60_000;
+    if (serverFlashTimeoutMs < 60_000 || serverFlashTimeoutMs > 30 * 60_000) throw new Error('ESP32 flash timeout must be between 1 and 30 minutes');
+    const flashTimeoutMs = serverFlashTimeoutMs + 30_000;
     const flashInactivityTimeoutMs = options.flashInactivityTimeoutMs ?? 90_000;
     let tunnelStarted = false;
     let unsubscribe = () => {};
@@ -371,7 +375,7 @@ export class EdgezMeshSdk {
         await connected.promise;
         clearTimeout(connectTimer);
         clearInterval(connectPollTimer);
-        await this.flashUsbReleaseFirmware({jobId, profile: options.chip, baudRate: options.baudRate ?? 115200, firmwareUrl: options.firmwareUrl, sha256: options.sha256});
+        await this.flashUsbReleaseFirmware({jobId, profile: options.chip, baudRate: options.baudRate ?? 115200, ackWindow: options.ackWindow ?? 5, timeoutSeconds: Math.ceil(serverFlashTimeoutMs / 1000), esptoolConfig: options.esptoolConfig ?? 'high-latency', firmwareUrl: options.firmwareUrl, sha256: options.sha256});
         refreshFlashInactivityTimer();
         flashTimer = setTimeout(() => finished.reject(new Error('Timed out waiting for ESP32 flashing to finish')), flashTimeoutMs);
         return await finished.promise;
