@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.24
+
+- Recover nRF54L CMSIS-DAP connections with nRESET pulses, repeated SWD setup,
+  sticky-error clearing before DP bank selection, and core-halt retries.
+- Report the failing SWD request and setup stage when target initialization
+  cannot be recovered.
+
 ## 0.1.23
 
 - Preserve the authenticated flash WebSocket while intentionally closing the

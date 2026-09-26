@@ -38,12 +38,14 @@ final class CmsisDapNrf54Programmer implements AutoCloseable {
     private static final int DAP_TRANSFER = 0x05;
     private static final int DAP_TRANSFER_BLOCK = 0x06;
     private static final int DAP_RESET_TARGET = 0x0A;
+    private static final int DAP_SWJ_PINS = 0x10;
     private static final int DAP_SWJ_CLOCK = 0x11;
     private static final int DAP_SWJ_SEQUENCE = 0x12;
     private static final int DAP_SWD_CONFIGURE = 0x13;
     private static final int DAP_OK = 1;
     private static final int DAP_WAIT = 2;
     private static final int DAP_NO_ACK = 7;
+    private static final int SWD_CONNECT_ATTEMPTS = 5;
     private static final int TRANSFER_RETRIES = 50;
     private static final int DP_CTRL_STAT = 0x04;
     private static final int DP_SELECT = 0x08;
@@ -137,31 +139,10 @@ final class CmsisDapNrf54Programmer implements AutoCloseable {
                     ByteBuffer.wrap(packetInfo, 2, 2).order(ByteOrder.LITTLE_ENDIAN).getShort());
             if (advertised >= 64 && advertised <= 512) packetSize = advertised;
         }
-        byte[] connected = command(DAP_CONNECT, new byte[]{1});
-        if (connected.length < 2 || connected[1] != 1) throw new IOException("CMSIS-DAP could not enter SWD mode");
-        statusCommand(DAP_SWD_CONFIGURE, new byte[]{0});
-        statusCommand(DAP_SWJ_CLOCK, le32(1_000_000));
-        statusCommand(DAP_TRANSFER_CONFIGURE, new byte[]{2, (byte) 150, 0, 0, 0});
-        swjSequence(repeat((byte) 0xFF, 7), 51);
-        swjSequence(new byte[]{(byte) 0x9E, (byte) 0xE7}, 16);
-        swjSequence(repeat((byte) 0xFF, 7), 51);
-        swjSequence(new byte[]{0}, 8);
-        int idcode = readDpBlock(0x00);
-        if (idcode == 0 || idcode == -1) throw new IOException("Invalid SWD IDCODE");
-        writeDp(DP_SELECT, 0);
-        writeDp(0x00, 0x1F);
-        writeDp(DP_CTRL_STAT, 0x50000F00);
-        boolean powered = false;
-        for (int retry = 0; retry < 100; retry++) {
-            if ((readDp(DP_CTRL_STAT) & 0xA0000000) == 0xA0000000) {
-                powered = true;
-                break;
-            }
-        }
-        if (!powered) throw new IOException("ARM debug and system power-up acknowledgement timed out");
+        connectDebugPort(progress, total);
         writeDp(DP_SELECT, 0);
         writeAp(AP_CSW, MEM_AP_CSW);
-        haltCore();
+        haltCoreWithRecovery();
         ByteBuffer algorithm = ByteBuffer.allocate(FLASH_ALGORITHM.length * 4).order(ByteOrder.LITTLE_ENDIAN);
         for (int instruction : FLASH_ALGORITHM) algorithm.putInt(instruction);
         writeMemoryBytes(ALGO_LOAD_ADDRESS, algorithm.array(), 0, algorithm.array().length);
@@ -223,6 +204,109 @@ final class CmsisDapNrf54Programmer implements AutoCloseable {
         writeMemoryWord(AIRCR, AIRCR_SYSRESETREQ);
         command(DAP_RESET_TARGET, new byte[0]);
         command(DAP_DISCONNECT, new byte[0]);
+    }
+
+    private void connectDebugPort(ProgressListener progress, long total) throws IOException {
+        IOException lastFailure = null;
+        for (int attempt = 0; attempt < SWD_CONNECT_ATTEMPTS; attempt++) {
+            String stage = "connect";
+            try {
+                if (attempt > 0) {
+                    progress.onProgress(0, total, "Retrying nRF54L SWD connection ("
+                            + (attempt + 1) + "/" + SWD_CONNECT_ATTEMPTS + ")");
+                    pulseNReset();
+                    sleep(50L << attempt);
+                } else {
+                    progress.onProgress(0, total, "Connecting to nRF54L over CMSIS-DAP");
+                }
+
+                stage = "DAP connect";
+                byte[] connected = command(DAP_CONNECT, new byte[]{1});
+                if (connected.length < 2 || connected[1] != 1) {
+                    connected = command(DAP_CONNECT, new byte[]{3});
+                }
+                if (connected.length < 2 || connected[1] != 1) {
+                    throw new IOException("CMSIS-DAP could not enter SWD mode");
+                }
+
+                stage = "SWD configure";
+                statusCommand(DAP_SWD_CONFIGURE, new byte[]{0});
+                statusCommand(DAP_SWJ_CLOCK, le32(1_000_000));
+                statusCommand(DAP_TRANSFER_CONFIGURE, new byte[]{2, (byte) 150, 0, 0, 0});
+
+                stage = "SWD line reset";
+                switchToSwd();
+
+                stage = "DP IDCODE read";
+                int idcode = readDpBlock(0x00);
+                if (idcode == 0 || idcode == -1) {
+                    throw new IOException("Invalid SWD IDCODE 0x" + Integer.toHexString(idcode));
+                }
+
+                // A previous debugger or interrupted flash can leave STICKYERR set. ABORT is
+                // always accessible in DP bank 0, so clear it before touching SELECT. Without
+                // this, the first SELECT write is allowed to return FAULT even after IDCODE read.
+                stage = "DP sticky-error clear";
+                writeDp(0x00, 0x1F);
+
+                stage = "DP bank select";
+                writeDp(DP_SELECT, 0);
+                writeDp(0x00, 0x1F);
+
+                stage = "debug power-up";
+                writeDp(DP_CTRL_STAT, 0x50000F00);
+                for (int retry = 0; retry < 200; retry++) {
+                    if ((readDp(DP_CTRL_STAT) & 0xA0000000) == 0xA0000000) {
+                        progress.onProgress(0, total, "Connected to nRF54L debug port 0x"
+                                + Integer.toHexString(idcode));
+                        return;
+                    }
+                    sleep(10);
+                }
+                throw new IOException("ARM debug and system power-up acknowledgement timed out");
+            } catch (IOException failure) {
+                lastFailure = new IOException(stage + " failed: " + failure.getMessage(), failure);
+                try { writeDp(0x00, 0x1F); } catch (IOException ignored) { }
+            }
+        }
+        throw new IOException("Unable to initialize nRF54L SWD after "
+                + SWD_CONNECT_ATTEMPTS + " attempts", lastFailure);
+    }
+
+    private void switchToSwd() throws IOException {
+        swjSequence(repeat((byte) 0xFF, 7), 51);
+        swjSequence(new byte[]{(byte) 0x9E, (byte) 0xE7}, 16);
+        swjSequence(repeat((byte) 0xFF, 7), 51);
+        swjSequence(new byte[]{0}, 8);
+    }
+
+    private void pulseNReset() throws IOException {
+        swjPins(0x00, 0x80, 50_000);
+        swjPins(0x80, 0x80, 50_000);
+        sleep(70);
+    }
+
+    private void swjPins(int outputPins, int selectedPins, int waitMicros) throws IOException {
+        ByteBuffer payload = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN);
+        payload.put((byte) outputPins).put((byte) selectedPins).putInt(waitMicros);
+        byte[] response = command(DAP_SWJ_PINS, payload.array());
+        if (response.length < 2) throw new IOException("Short CMSIS-DAP SWJ pins response");
+    }
+
+    private void haltCoreWithRecovery() throws IOException {
+        IOException failure = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                haltCore();
+                return;
+            } catch (IOException current) {
+                failure = current;
+                writeDp(0x00, 0x1F);
+                writeDp(DP_CTRL_STAT, 0x50000F00);
+                sleep(50);
+            }
+        }
+        throw new IOException("Unable to halt the nRF54L Cortex-M33", failure);
     }
 
     private void writeMemoryWord(int address, int value) throws IOException {
@@ -354,14 +438,14 @@ final class CmsisDapNrf54Programmer implements AutoCloseable {
             if (ack == DAP_WAIT && attempt < TRANSFER_RETRIES) continue;
             if (ack == DAP_NO_ACK && !resetAttempted) {
                 resetAttempted = true;
-                swjSequence(repeat((byte) 0xFF, 7), 51);
-                swjSequence(new byte[]{(byte) 0x9E, (byte) 0xE7}, 16);
-                swjSequence(repeat((byte) 0xFF, 7), 51);
-                swjSequence(new byte[]{0}, 8);
+                switchToSwd();
                 continue;
             }
             if (ack != DAP_OK) {
-                throw new IOException("CMSIS-DAP transfer failed response=" + hex(response));
+                throw new IOException("CMSIS-DAP transfer failed request=0x"
+                        + Integer.toHexString(request) + " value="
+                        + (value == null ? "read" : "0x" + Integer.toHexString(value))
+                        + " response=" + hex(response));
             }
             if (value == null) {
                 if (response.length < 7) throw new IOException("Short CMSIS-DAP read response");
