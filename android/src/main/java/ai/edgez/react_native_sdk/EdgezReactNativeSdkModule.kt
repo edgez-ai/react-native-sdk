@@ -125,6 +125,37 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
     @ReactMethod fun sendPacket(arguments: ReadableMap, promise: Promise) = queuePacket(arguments, promise)
 
     @ReactMethod
+    fun getAppBundleUpdateStatus(arguments: ReadableMap, promise: Promise) {
+        promise.resolve(EdgezBundleUpdateManager.status(reactContext))
+    }
+
+    @ReactMethod
+    fun installAppBundleUpdate(arguments: ReadableMap, promise: Promise) {
+        val updateId = arguments.getString("updateId").orEmpty()
+        val runtimeVersion = arguments.getString("runtimeVersion").orEmpty()
+        val bundleUrl = arguments.getString("bundleUrl").orEmpty()
+        val sha256 = arguments.getString("sha256").orEmpty()
+        thread(name = "edgez-app-bundle-download") {
+            runCatching {
+                EdgezBundleUpdateManager.install(reactContext, updateId, runtimeVersion, bundleUrl, sha256)
+            }.fold(
+                { result -> reactContext.runOnUiQueueThread { promise.resolve(result) } },
+                { error -> reactContext.runOnUiQueueThread { promise.reject("app_bundle_install_failed", error.message, error) } },
+            )
+        }
+    }
+
+    @ReactMethod
+    fun markAppBundleUpdateHealthy(arguments: ReadableMap, promise: Promise) {
+        promise.resolve(EdgezBundleUpdateManager.markHealthy(reactContext))
+    }
+
+    @ReactMethod
+    fun rollbackAppBundleUpdate(arguments: ReadableMap, promise: Promise) {
+        promise.resolve(EdgezBundleUpdateManager.rollback(reactContext))
+    }
+
+    @ReactMethod
     fun startUsbIpServer(arguments: ReadableMap, promise: Promise) {
         runCatching {
             val server = synchronized(usbIpLock) {

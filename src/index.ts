@@ -4,5 +4,6 @@ export * from './EdgezMeshSdk';
 export * from './EdgezMeshSession';
 export * from './storage';
 export * from './ota';
+export * from './appUpdates';
 export * from './useEdgezMesh';
 export * from './EdgezOrganicMap';

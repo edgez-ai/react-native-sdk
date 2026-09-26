@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.14
+
+- Add verified Android React Native bundle updates through the existing EdgeZ
+  firmware OTA release proxy.
+- Select staged bundles before React starts, reject incompatible native runtime
+  versions, and roll back automatically when a new bundle does not report a
+  healthy first launch.
+
 ## 0.1.13
 
 - Add an ESP32/esptool-only USB/IP fast path that queues CP210x bulk writes on

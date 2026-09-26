@@ -15,6 +15,8 @@ iOS is not yet implemented.
 - device provisioning settings and Lua driver transfer
 - BLE firmware OTA with acknowledged writes, progress, and cancellation
 - Android USB/IP host support for remote ESP32, J-Link, and OpenOCD flashing
+- verified Android React Native bundle updates through the firmware OTA proxy,
+  with native-runtime compatibility checks and automatic crash rollback
 - Android BLE foreground service and message/call notification channels
 - best-known Android location lookup for shared beacons
 - native Organic Maps view with mesh-node markers, offline map downloads,
@@ -37,6 +39,38 @@ npm install @edgez/react-native-sdk \
 
 The SDK contains native modules, so rebuild the native application after
 installing it; Expo Go cannot load them.
+
+## Android app bundle updates
+
+An Android host app can load a release JS bundle from private app storage while
+keeping the bundle embedded in the APK as a safe fallback. Configure the host's
+`MainApplication` to pass
+`EdgezBundleUpdateManager.resolveBundleFile(applicationContext, BuildConfig.DEBUG, runtimeVersion)`
+as the `jsBundleFilePath` used to create its React host. The runtime version must
+be changed whenever native modules or other native app compatibility changes.
+
+After React mounts, mark the selected bundle healthy and check the same
+constrained OTA release proxy used by device firmware:
+
+```ts
+import {
+  checkAndInstallAppBundleUpdate,
+  markAppBundleUpdateHealthy,
+} from '@edgez/react-native-sdk';
+
+await markAppBundleUpdateHealthy();
+const result = await checkAndInstallAppBundleUpdate({
+  repositoryUrl: 'https://github.com/example/mobile-app',
+});
+// result.state === 'installed' means the verified update is used next launch.
+```
+
+The release must contain `live-stocking-update.json` and the bundle asset named
+by that manifest. The SDK verifies the SHA-256 and runtime version before
+staging it. If the first launch of a staged bundle exits before it is marked
+healthy, the following launch automatically restores the APK bundle. Bundle
+updates that trigger this rollback are not installed repeatedly. Bundle updates
+may change JavaScript only; adding native dependencies still requires a new APK.
 
 On macOS the SDK autolinks through CocoaPods. On Windows it autolinks the C++
 React Native Windows project and the consuming app must declare the Bluetooth
