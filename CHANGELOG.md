@@ -1,8 +1,13 @@
 # Changelog
 
+## 0.1.15
+
+- Require app bundle manifests to be signed by the same certificate as the
+  installed Android APK before downloading or activating an update.
+
 ## 0.1.14
 
-- Add verified Android React Native bundle updates through the existing EdgeZ
+- Add SHA-256-verified Android React Native bundle updates through the existing EdgeZ
   firmware OTA release proxy.
 - Select staged bundles before React starts, reject incompatible native runtime
   versions, and roll back automatically when a new bundle does not report a

@@ -1,14 +1,21 @@
 package ai.edgez.react_native_sdk
 
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import android.util.Base64
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.WritableMap
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
+import java.io.ByteArrayInputStream
 import java.security.MessageDigest
+import java.security.Signature
+import java.security.cert.CertificateFactory
 import java.util.concurrent.TimeUnit
+import org.json.JSONObject
 
 /**
  * Stores a verified React Native bundle outside the APK and selects it before
@@ -56,11 +63,14 @@ object EdgezBundleUpdateManager {
 
     fun install(
         context: Context,
-        updateId: String,
-        runtimeVersion: String,
         bundleUrl: String,
-        expectedSha256: String,
+        signedPayload: String,
+        manifestSignature: String,
     ): WritableMap {
+        val payload = verifyManifest(context, signedPayload, manifestSignature)
+        val updateId = payload.getString("updateId")
+        val runtimeVersion = payload.getString("runtimeVersion")
+        val expectedSha256 = payload.getString("sha256")
         require(updateId.isNotBlank() && updateId.length <= 256) { "Invalid app update ID" }
         require(runtimeVersion.isNotBlank() && runtimeVersion.length <= 128) { "Invalid app update runtime" }
         val currentRuntime = prefs(context).getString(KEY_CURRENT_RUNTIME, null)
@@ -159,4 +169,36 @@ object EdgezBundleUpdateManager {
 
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    private fun verifyManifest(context: Context, signedPayload: String, manifestSignature: String): JSONObject {
+        val payloadBytes = runCatching { Base64.decode(signedPayload, Base64.DEFAULT) }
+            .getOrElse { throw IllegalArgumentException("Invalid signed app bundle payload", it) }
+        val signatureBytes = runCatching { Base64.decode(manifestSignature, Base64.DEFAULT) }
+            .getOrElse { throw IllegalArgumentException("Invalid app bundle signature", it) }
+        val packageInfo = if (Build.VERSION.SDK_INT >= 33) {
+            context.packageManager.getPackageInfo(
+                context.packageName,
+                PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong()),
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+        }
+        val certificateFactory = CertificateFactory.getInstance("X.509")
+        val verified = packageInfo.signingInfo?.apkContentsSigners.orEmpty().any { signer ->
+            val certificate = certificateFactory.generateCertificate(ByteArrayInputStream(signer.toByteArray()))
+            val algorithm = when (certificate.publicKey.algorithm.uppercase()) {
+                "RSA" -> "SHA256withRSA"
+                "EC", "ECDSA" -> "SHA256withECDSA"
+                else -> return@any false
+            }
+            Signature.getInstance(algorithm).run {
+                initVerify(certificate.publicKey)
+                update(payloadBytes)
+                verify(signatureBytes)
+            }
+        }
+        check(verified) { "App bundle manifest signature does not match the installed APK" }
+        return JSONObject(payloadBytes.toString(Charsets.UTF_8))
+    }
 }

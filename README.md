@@ -66,8 +66,9 @@ const result = await checkAndInstallAppBundleUpdate({
 ```
 
 The release must contain `live-stocking-update.json` and the bundle asset named
-by that manifest. The SDK verifies the SHA-256 and runtime version before
-staging it. If the first launch of a staged bundle exits before it is marked
+by that manifest. The SDK verifies the manifest against the installed APK
+signing certificate, then checks the SHA-256 and runtime version before staging
+it. If the first launch of a staged bundle exits before it is marked
 healthy, the following launch automatically restores the APK bundle. Bundle
 updates that trigger this rollback are not installed repeatedly. Bundle updates
 may change JavaScript only; adding native dependencies still requires a new APK.

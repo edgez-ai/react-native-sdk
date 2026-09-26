@@ -131,13 +131,12 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
 
     @ReactMethod
     fun installAppBundleUpdate(arguments: ReadableMap, promise: Promise) {
-        val updateId = arguments.getString("updateId").orEmpty()
-        val runtimeVersion = arguments.getString("runtimeVersion").orEmpty()
         val bundleUrl = arguments.getString("bundleUrl").orEmpty()
-        val sha256 = arguments.getString("sha256").orEmpty()
+        val signedPayload = arguments.getString("signedPayload").orEmpty()
+        val manifestSignature = arguments.getString("signature").orEmpty()
         thread(name = "edgez-app-bundle-download") {
             runCatching {
-                EdgezBundleUpdateManager.install(reactContext, updateId, runtimeVersion, bundleUrl, sha256)
+                EdgezBundleUpdateManager.install(reactContext, bundleUrl, signedPayload, manifestSignature)
             }.fold(
                 { result -> reactContext.runOnUiQueueThread { promise.resolve(result) } },
                 { error -> reactContext.runOnUiQueueThread { promise.reject("app_bundle_install_failed", error.message, error) } },

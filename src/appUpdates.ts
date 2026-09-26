@@ -10,6 +10,8 @@ export interface EdgezAppBundleManifest {
   sha256: string;
   size: number;
   createdAt: string;
+  signedPayload: string;
+  signature: string;
 }
 
 export interface EdgezAppBundleUpdateStatus {
@@ -57,8 +59,32 @@ function safeAsset(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_.-]+$/.test(value);
 }
 
+function decodeBase64Utf8(encoded: string): string {
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) throw new Error('Invalid base64 encoding');
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const bytes: number[] = [];
+  let bits = 0;
+  let bitCount = 0;
+  for (const character of encoded.replace(/=+$/, '')) {
+    bits = (bits << 6) | alphabet.indexOf(character);
+    bitCount += 6;
+    if (bitCount >= 8) {
+      bitCount -= 8;
+      bytes.push((bits >> bitCount) & 0xff);
+      bits &= (1 << bitCount) - 1;
+    }
+  }
+  return new TextDecoder().decode(Uint8Array.from(bytes));
+}
+
 export function parseAppBundleManifest(value: unknown): EdgezAppBundleManifest {
-  const manifest = value as Partial<EdgezAppBundleManifest> | null;
+  const envelope = value as {schemaVersion?: unknown; signedPayload?: unknown; signature?: unknown} | null;
+  if (!envelope || envelope.schemaVersion !== 1 || typeof envelope.signedPayload !== 'string' || typeof envelope.signature !== 'string') {
+    throw new Error('Unsupported signed app bundle manifest');
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(decodeBase64Utf8(envelope.signedPayload)); } catch { throw new Error('Invalid signed app bundle payload'); }
+  const manifest = parsed as Partial<EdgezAppBundleManifest> | null;
   if (!manifest || manifest.schemaVersion !== 1 || manifest.platform !== 'android') throw new Error('Unsupported app bundle manifest');
   if (typeof manifest.updateId !== 'string' || !manifest.updateId || manifest.updateId.length > 256) throw new Error('Invalid app bundle update ID');
   if (typeof manifest.runtimeVersion !== 'string' || !manifest.runtimeVersion || manifest.runtimeVersion.length > 128) throw new Error('Invalid app bundle runtime');
@@ -67,7 +93,8 @@ export function parseAppBundleManifest(value: unknown): EdgezAppBundleManifest {
   if (typeof manifest.sha256 !== 'string' || !/^[0-9a-fA-F]{64}$/.test(manifest.sha256)) throw new Error('Invalid app bundle SHA-256');
   if (typeof manifest.size !== 'number' || !Number.isSafeInteger(manifest.size) || manifest.size <= 0 || manifest.size > 64 * 1024 * 1024) throw new Error('Invalid app bundle size');
   if (typeof manifest.createdAt !== 'string' || Number.isNaN(Date.parse(manifest.createdAt))) throw new Error('Invalid app bundle creation time');
-  return {...manifest, sha256: manifest.sha256.toLowerCase()} as EdgezAppBundleManifest;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(envelope.signature)) throw new Error('Invalid app bundle signature');
+  return {...manifest, sha256: manifest.sha256.toLowerCase(), signedPayload: envelope.signedPayload, signature: envelope.signature} as EdgezAppBundleManifest;
 }
 
 export async function getAppBundleUpdateStatus(): Promise<EdgezAppBundleUpdateStatus> {
@@ -78,10 +105,9 @@ export async function getAppBundleUpdateStatus(): Promise<EdgezAppBundleUpdateSt
 export async function installAppBundleUpdate(manifest: EdgezAppBundleManifest, bundleUrl: string): Promise<EdgezAppBundleUpdateStatus> {
   if (Platform.OS !== 'android') throw new Error('React Native bundle updates currently require Android');
   return nativeBundleModule().installAppBundleUpdate({
-    updateId: manifest.updateId,
-    runtimeVersion: manifest.runtimeVersion,
     bundleUrl,
-    sha256: manifest.sha256,
+    signedPayload: manifest.signedPayload,
+    signature: manifest.signature,
   });
 }
 
