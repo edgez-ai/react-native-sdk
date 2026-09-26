@@ -206,7 +206,7 @@ await sdk.flashNrf54JLinkReleaseFirmware({
 });
 ```
 
-The client selects only the fixed `nrf54-jlink` profile. Device name, SWD
+The client selects only the fixed `nrf54l15-jlink` profile. Device name, SWD
 speed, reset sequence, and J-Link command script remain operator-controlled in
 the runtime profile file.
 

@@ -198,9 +198,9 @@ describe('EdgezMeshSdk packet API', () => {
       await expect(sdk.flashNrf54JLinkReleaseFirmware({
         projectId: 'project-1', teamId: 'team-1', jwt: 'jwt-1', busId: '2-1',
         firmwareUrl, sha256: 'd'.repeat(64), jobId: 'nrf54-test',
-      })).resolves.toMatchObject({jobId: 'nrf54-test', profile: 'nrf54-jlink', size: 16384, state: 'complete'});
+      })).resolves.toMatchObject({jobId: 'nrf54-test', profile: 'nrf54l15-jlink', size: 16384, state: 'complete'});
       expect(transport.calls).toEqual(expect.arrayContaining([
-        {method: 'flashUsbReleaseFirmware', arguments_: {jobId: 'nrf54-test', profile: 'nrf54-jlink', timeoutSeconds: 1800, firmwareUrl, sha256: 'd'.repeat(64)}},
+        {method: 'flashUsbReleaseFirmware', arguments_: {jobId: 'nrf54-test', profile: 'nrf54l15-jlink', timeoutSeconds: 1800, firmwareUrl, sha256: 'd'.repeat(64)}},
       ]));
     } finally {
       global.fetch = originalFetch;

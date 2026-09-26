@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.18
+
+- Align the managed nRF54L15 flow with the deployed `nrf54l15-jlink` runtime
+  profile name.
+
 ## 0.1.17
 
 - Add a managed nRF54L15 J-Link release flashing flow using the runtime-owned

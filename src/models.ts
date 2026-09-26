@@ -410,7 +410,7 @@ export interface EdgezUsbFlashResult {
 
 export interface EdgezNrf54JLinkFlashResult {
   jobId: string;
-  profile: 'nrf54-jlink';
+  profile: 'nrf54l15-jlink';
   size: number;
   sha256: string;
   state: 'complete';

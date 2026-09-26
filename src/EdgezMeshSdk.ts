@@ -435,7 +435,7 @@ export class EdgezMeshSdk {
         if (status.state !== 'complete' && status.state !== 'failed' && status.state !== 'cancelled') refreshFlashInactivityTimer();
         if (status.size) size = status.size;
         if (status.state === 'complete') {
-          finished.resolve({jobId, profile: 'nrf54-jlink', size, sha256: options.sha256.toLowerCase(), state: 'complete'});
+          finished.resolve({jobId, profile: 'nrf54l15-jlink', size, sha256: options.sha256.toLowerCase(), state: 'complete'});
         } else if (status.state === 'failed' || status.state === 'cancelled') {
           finished.reject(new Error(status.message || `nRF54L15 flash ${status.state}`));
         }
@@ -458,7 +458,7 @@ export class EdgezMeshSdk {
         clearInterval(connectPollTimer);
         await this.flashUsbReleaseFirmware({
           jobId,
-          profile: 'nrf54-jlink',
+          profile: 'nrf54l15-jlink',
           timeoutSeconds: Math.ceil(serverFlashTimeoutMs / 1000),
           firmwareUrl: options.firmwareUrl,
           sha256: options.sha256,
