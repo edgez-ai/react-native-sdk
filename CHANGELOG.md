@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.22
+
+- Add a backend-controlled Android CMSIS-DAP accelerator for nRF54L15. The
+  runtime downloads and verifies the release asset, streams it to the SDK, and
+  receives block-level programming and read-back verification progress.
+- Run the nRF54L15 flash algorithm locally on the target through CMSIS-DAP so
+  SWD operations no longer incur a WebSocket round trip.
+
 ## 0.1.21
 
 - Add the fixed `nrf54l15-openocd` managed release-flash flow for CMSIS-DAP

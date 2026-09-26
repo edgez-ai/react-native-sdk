@@ -21,6 +21,7 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
+import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -225,6 +226,50 @@ final class UsbIpServer implements AutoCloseable {
             }
         }
         throw new IOException("USB device " + requestedBusId + " is not imported");
+    }
+
+    void releaseImportedDevice(String requestedBusId) {
+        for (DeviceSession session : deviceSessions) {
+            if (session.sessionBusId.equals(requestedBusId)) session.close();
+        }
+    }
+
+    void programNrf54(
+            String requestedBusId,
+            File ihex,
+            CmsisDapNrf54Programmer.ProgressListener progress) throws IOException {
+        long handoffDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (hasImportedSession(requestedBusId) && System.nanoTime() < handoffDeadline) {
+            try {
+                Thread.sleep(25);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while waiting for CMSIS-DAP USB/IP handoff", interrupted);
+            }
+        }
+        if (hasImportedSession(requestedBusId)) {
+            throw new IOException("CMSIS-DAP device is still imported by USB/IP after backend handoff");
+        }
+        UsbDevice device = findDevice(requestedBusId);
+        if (device == null || !usbManager.hasPermission(device)) {
+            throw new IOException("CMSIS-DAP device " + requestedBusId + " is unavailable or permission was denied");
+        }
+        UsbDeviceConnection connection = usbManager.openDevice(device);
+        if (connection == null) {
+            throw new IOException("Unable to open CMSIS-DAP device " + requestedBusId);
+        }
+        Log.i(TAG, "Starting local CMSIS-DAP programming: " + deviceLabel(device));
+        try (CmsisDapNrf54Programmer programmer = new CmsisDapNrf54Programmer(device, connection)) {
+            programmer.program(ihex, progress);
+        }
+        Log.i(TAG, "Local CMSIS-DAP programming completed: " + deviceLabel(device));
+    }
+
+    private boolean hasImportedSession(String requestedBusId) {
+        for (DeviceSession session : deviceSessions) {
+            if (session.sessionBusId.equals(requestedBusId)) return true;
+        }
+        return false;
     }
 
     private void notifyUsbEvent(String action, UsbDevice device) {

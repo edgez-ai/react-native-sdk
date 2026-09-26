@@ -17,7 +17,9 @@ import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.InputStream
+import java.security.MessageDigest
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -43,6 +45,7 @@ internal class UsbIpWebSocketBridge(
         private const val FRAME_VERSION: Byte = 1
         private const val FRAME_ARTIFACT: Byte = 1
         private const val FRAME_USB_IP: Byte = 2
+        private const val FRAME_DEVICE_ARTIFACT: Byte = 3
         private val FRAME_MAGIC = byteArrayOf('E'.code.toByte(), 'Z'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte())
     }
 
@@ -75,12 +78,32 @@ internal class UsbIpWebSocketBridge(
     @Volatile private var localReaderThread: Thread? = null
     @Volatile private var websocketSenderThread: Thread? = null
     @Volatile private var metricsThread: Thread? = null
+    @Volatile private var deviceFlashUpload: DeviceFlashUpload? = null
+    @Volatile private var bridgeSocketName: String? = null
+    @Volatile private var bridgeBusId: String? = null
+    @Volatile private var activeDeviceFlashRequestId: String? = null
+    @Volatile private var activeDeviceFlashJobId: String? = null
+    private val deviceFlashCancelled = AtomicBoolean(false)
+
+    private data class DeviceFlashUpload(
+        val requestId: String,
+        val jobId: String,
+        val action: String,
+        val expectedSize: Long,
+        val expectedSha256: String,
+        val file: File,
+        val output: FileOutputStream,
+        val digest: MessageDigest = MessageDigest.getInstance("SHA-256"),
+        var received: Long = 0,
+    )
 
     fun start(url: String, token: String, busId: String, socketName: String) {
         require(url.startsWith("wss://")) { "USB flash tunnel URL must use wss://" }
         require(token.isNotBlank()) { "USB flash tunnel token is required" }
         require(busId.matches(Regex("^[0-9]+-[0-9]+$"))) { "Invalid USB bus ID" }
         check(webSocket == null) { "USB flash tunnel is already running" }
+        bridgeSocketName = socketName
+        bridgeBusId = busId
 
         val request = Request.Builder()
             .url(url)
@@ -97,30 +120,16 @@ internal class UsbIpWebSocketBridge(
                     return
                 }
                 socket.send(JSONObject(mapOf("type" to "hello", "role" to "mobile", "busId" to busId)).toString())
-                runCatching {
-                    LocalSocket().also {
-                        it.connect(LocalSocketAddress(socketName, LocalSocketAddress.Namespace.ABSTRACT))
-                        localSocket = it
-                    }
-                }.fold(
-                    onSuccess = { local ->
-                        Log.i(TAG, "USB flash bridge connected to local socket @$socketName")
-                        eventListener("connected", null)
-                        startMetrics(local, socket)
-                        pumpWebSocketToLocal(local, socket)
-                        pumpLocalToWebSocket(local, socket)
-                    },
-                    onFailure = { error ->
-                        Log.e(TAG, "USB flash bridge could not connect to local socket @$socketName", error)
-                        eventListener("failed", error.message)
-                        socket.close(1011, "USB/IP socket unavailable")
-                    },
-                )
+                connectLocalBridge(socket, socketName, closeOnFailure = true)
             }
 
             override fun onMessage(socket: WebSocket, bytes: ByteString) {
                 runCatching {
                     val (kind, payload) = decodeFrame(bytes.toByteArray())
+                    if (kind == FRAME_DEVICE_ARTIFACT) {
+                        appendDeviceFlashArtifact(payload)
+                        return@runCatching
+                    }
                     check(kind == FRAME_USB_IP) { "Unexpected WebSocket frame type $kind" }
                     check(localSocket != null) { "USB/IP local socket is unavailable" }
                     check(localWriteQueue.offer(payload)) { "USB/IP local write queue is full" }
@@ -140,6 +149,18 @@ internal class UsbIpWebSocketBridge(
                         handleDeviceControl(socket, busId, message)
                         return
                     }
+                    if (message.optString("type") == "device.flash.request") {
+                        beginDeviceFlash(message)
+                        return
+                    }
+                    if (message.optString("type") == "device.flash.artifact.complete") {
+                        completeDeviceFlash(socket, busId, message)
+                        return
+                    }
+                    if (message.optString("type") == "device.flash.cancel") {
+                        cancelDeviceFlash(message)
+                        return
+                    }
                     if (message.optString("type") == "flash.status" && message.optString("state") == "uploading") {
                         val credit = message.optLong("credit", 0)
                         if (credit > 0) synchronized(creditLock) {
@@ -147,6 +168,10 @@ internal class UsbIpWebSocketBridge(
                             creditLock.notifyAll()
                         }
                     }
+                }.onFailure {
+                    eventListener("failed", it.message)
+                    close()
+                    return
                 }
                 eventListener("message", text.take(1024))
             }
@@ -261,6 +286,30 @@ internal class UsbIpWebSocketBridge(
         runCatching { localSocket?.shutdownOutput() }
         runCatching { localSocket?.close() }
         localSocket = null
+    }
+
+    private fun connectLocalBridge(socket: WebSocket, socketName: String, closeOnFailure: Boolean): Throwable? {
+        return runCatching {
+            LocalSocket().also {
+                it.connect(LocalSocketAddress(socketName, LocalSocketAddress.Namespace.ABSTRACT))
+                localSocket = it
+            }
+        }.fold(
+            onSuccess = { local ->
+                Log.i(TAG, "USB flash bridge connected to local socket @$socketName")
+                eventListener("connected", null)
+                startMetrics(local, socket)
+                pumpWebSocketToLocal(local, socket)
+                pumpLocalToWebSocket(local, socket)
+                null
+            },
+            onFailure = { error ->
+                Log.e(TAG, "USB flash bridge could not connect to local socket @$socketName", error)
+                eventListener("failed", error.message)
+                if (closeOnFailure) socket.close(1011, "USB/IP socket unavailable")
+                error
+            },
+        )
     }
 
     private fun startMetrics(local: LocalSocket, socket: WebSocket) {
@@ -422,6 +471,117 @@ internal class UsbIpWebSocketBridge(
         }
     }
 
+    private fun beginDeviceFlash(request: JSONObject) {
+        check(deviceFlashUpload == null) { "Another mobile flash artifact is active" }
+        val requestId = request.getString("requestId")
+        val jobId = request.getString("jobId")
+        val action = request.getString("action")
+        val size = request.getLong("size")
+        val sha256 = request.getString("sha256").lowercase()
+        require(requestId.isNotBlank() && jobId.isNotBlank()) { "Invalid mobile flash request" }
+        require(action == "cmsis-dap.nrf54l15.program") { "Unsupported mobile flash action: $action" }
+        require(size in 1..64L * 1024L * 1024L) { "Invalid mobile flash artifact size" }
+        require(sha256.matches(Regex("^[a-f0-9]{64}$"))) { "Invalid mobile flash SHA-256" }
+        val busId = requireNotNull(bridgeBusId) { "USB bridge bus ID is unavailable" }
+        // Linux has detached the USB/IP port before this request. Closing the
+        // local transport gives Android an explicit connection boundary and
+        // releases the probe without closing the authenticated WebSocket.
+        closeLocalSocket()
+        usbIpServer.releaseImportedDevice(busId)
+        val file = File.createTempFile("edgez-cmsis-dap-", ".hex", context.cacheDir)
+        activeDeviceFlashRequestId = requestId
+        activeDeviceFlashJobId = jobId
+        deviceFlashCancelled.set(false)
+        deviceFlashUpload = DeviceFlashUpload(
+            requestId, jobId, action, size, sha256, file, FileOutputStream(file),
+        )
+    }
+
+    private fun appendDeviceFlashArtifact(payload: ByteArray) {
+        val upload = deviceFlashUpload ?: error("Mobile flash artifact arrived without a request")
+        require(payload.isNotEmpty() && upload.received + payload.size <= upload.expectedSize) {
+            "Invalid mobile flash artifact chunk"
+        }
+        upload.output.write(payload)
+        upload.digest.update(payload)
+        upload.received += payload.size
+    }
+
+    private fun completeDeviceFlash(socket: WebSocket, busId: String, request: JSONObject) {
+        val upload = deviceFlashUpload ?: error("Mobile flash completion arrived without a request")
+        require(request.optString("requestId") == upload.requestId && request.optString("jobId") == upload.jobId) {
+            "Mobile flash completion does not match the active request"
+        }
+        deviceFlashUpload = null
+        upload.output.close()
+        val digest = upload.digest.digest().joinToString("") { "%02x".format(it) }
+        if (upload.received != upload.expectedSize || digest != upload.expectedSha256) {
+            upload.file.delete()
+            bridgeSocketName?.let { connectLocalBridge(socket, it, closeOnFailure = false) }
+            activeDeviceFlashRequestId = null
+            activeDeviceFlashJobId = null
+            sendDeviceFlashStatus(socket, upload, "failed", "Streamed firmware size or SHA-256 does not match")
+            return
+        }
+        sendDeviceFlashStatus(socket, upload, "verified", "Firmware verified on Android", upload.received)
+        thread(name = "edgez-cmsis-dap-programmer", isDaemon = true) {
+            var lastReported = 0L
+            var lastReportNanos = 0L
+            val error = runCatching {
+                check(!deviceFlashCancelled.get()) { "CMSIS-DAP programming was cancelled" }
+                usbIpServer.programNrf54(busId, upload.file) { completed, total, message ->
+                    check(!closed.get() && !deviceFlashCancelled.get()) {
+                        "CMSIS-DAP programming was cancelled"
+                    }
+                    val now = System.nanoTime()
+                    if (completed == 0L || completed == total || completed - lastReported >= 64 * 1024 || now - lastReportNanos >= 1_000_000_000L) {
+                        lastReported = completed
+                        lastReportNanos = now
+                        sendDeviceFlashStatus(socket, upload, "flashing", message, completed, total)
+                    }
+                }
+            }.exceptionOrNull()
+            upload.file.delete()
+            bridgeSocketName?.let { connectLocalBridge(socket, it, closeOnFailure = false) }
+            activeDeviceFlashRequestId = null
+            activeDeviceFlashJobId = null
+            if (deviceFlashCancelled.get()) {
+                sendDeviceFlashStatus(socket, upload, "cancelled", "CMSIS-DAP programming was cancelled")
+            } else if (error == null) {
+                sendDeviceFlashStatus(socket, upload, "complete", "CMSIS-DAP programming and verification complete", upload.expectedSize)
+            } else {
+                sendDeviceFlashStatus(socket, upload, "failed", error.message ?: error.javaClass.simpleName)
+            }
+        }
+    }
+
+    private fun cancelDeviceFlash(request: JSONObject) {
+        if (request.optString("requestId") == activeDeviceFlashRequestId
+            && request.optString("jobId") == activeDeviceFlashJobId) {
+            deviceFlashCancelled.set(true)
+        }
+    }
+
+    private fun sendDeviceFlashStatus(
+        socket: WebSocket,
+        upload: DeviceFlashUpload,
+        state: String,
+        message: String,
+        received: Long = 0,
+        size: Long = upload.expectedSize,
+    ) {
+        val response = JSONObject().apply {
+            put("type", "device.flash.status")
+            put("requestId", upload.requestId)
+            put("jobId", upload.jobId)
+            put("state", state)
+            put("message", message)
+            put("received", received)
+            put("size", size)
+        }
+        check(socket.send(response.toString())) { "WebSocket rejected mobile flash status" }
+    }
+
     private fun uploadFirmware(socket: WebSocket, input: InputStream, expectedSize: Long) {
         val buffer = ByteArray(READ_BUFFER_BYTES)
         var sent = 0L
@@ -478,6 +638,16 @@ internal class UsbIpWebSocketBridge(
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         synchronized(creditLock) { creditLock.notifyAll() }
+        deviceFlashUpload?.let { upload ->
+            runCatching { upload.output.close() }
+            upload.file.delete()
+        }
+        deviceFlashUpload = null
+        deviceFlashCancelled.set(true)
+        activeDeviceFlashRequestId = null
+        activeDeviceFlashJobId = null
+        bridgeSocketName = null
+        bridgeBusId = null
         closeLocalSocket()
         // cancel() also terminates an HTTP upgrade that is still waiting for a
         // cold organization runtime. close() only works after the WebSocket

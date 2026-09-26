@@ -225,8 +225,12 @@ await sdk.flashNrf54OpenOcdReleaseFirmware({
 });
 ```
 
-The client can select only `nrf54l15-openocd`; the CMSIS-DAP interface, target
-configuration, memory-write enable, and reset command remain runtime-owned.
+The client can select only `nrf54l15-openocd`. The backend remains responsible
+for authentication, profile selection, release download, and SHA-256
+verification. For runtimes configured with the Android CMSIS-DAP accelerator,
+the verified image is streamed to the SDK and its latency-sensitive SWD flash
+algorithm runs next to the USB probe. Individual applications do not contain
+target-specific flashing code.
 
 The lower-level API remains available when an application needs to keep a
 tunnel open or manage several operations itself:
