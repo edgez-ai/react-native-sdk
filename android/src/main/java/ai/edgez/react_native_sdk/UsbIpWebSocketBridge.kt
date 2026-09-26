@@ -272,6 +272,12 @@ internal class UsbIpWebSocketBridge(
     }
 
     private fun closeLocalSocket() {
+        // Detach the socket from shared state before closing it. The local
+        // reader treats an unexpected EOF on the current socket as a tunnel
+        // failure; CMSIS-DAP handoff closes this socket intentionally and must
+        // not race that check into closing the authenticated WebSocket.
+        val socket = localSocket
+        localSocket = null
         metricsThread?.interrupt()
         metricsThread = null
         localWriterThread?.interrupt()
@@ -282,10 +288,9 @@ internal class UsbIpWebSocketBridge(
         websocketSenderThread = null
         localWriteQueue.clear()
         websocketSendQueue.clear()
-        runCatching { localSocket?.shutdownInput() }
-        runCatching { localSocket?.shutdownOutput() }
-        runCatching { localSocket?.close() }
-        localSocket = null
+        runCatching { socket?.shutdownInput() }
+        runCatching { socket?.shutdownOutput() }
+        runCatching { socket?.close() }
     }
 
     private fun connectLocalBridge(socket: WebSocket, socketName: String, closeOnFailure: Boolean): Throwable? {

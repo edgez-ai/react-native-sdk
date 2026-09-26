@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.23
+
+- Preserve the authenticated flash WebSocket while intentionally closing the
+  local USB/IP socket to hand a CMSIS-DAP probe to the Android programmer.
+
 ## 0.1.22
 
 - Add a backend-controlled Android CMSIS-DAP accelerator for nRF54L15. The
