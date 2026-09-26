@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.13
+
+- Add an ESP32/esptool-only USB/IP fast path that queues CP210x bulk writes on
+  Android while the runtime completes their local USB/IP submissions, removing
+  a WAN round trip from every small serial write.
+- Keep device reads and control transfers as ordering barriers backed by real
+  USB results. J-Link and OpenOCD continue to use strict USB/IP behavior.
+
 ## 0.1.12
 
 - Queue Android USB/IP responses independently from WebSocket transmission and

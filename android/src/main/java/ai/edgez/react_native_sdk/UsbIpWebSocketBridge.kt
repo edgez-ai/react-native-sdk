@@ -388,7 +388,12 @@ internal class UsbIpWebSocketBridge(
         thread(name = "edgez-usb-device-control", isDaemon = true) {
             val error = runCatching {
                 require(requestId.isNotBlank()) { "Missing device control request ID" }
-                require(action in setOf("esp32.enter-bootloader", "esp32.run-app")) {
+                require(action in setOf(
+                    "esp32.enter-bootloader",
+                    "esp32.run-app",
+                    "esp32.usbip-fast-mode.enable",
+                    "esp32.usbip-fast-mode.disable",
+                )) {
                     "Unsupported device control action: $action"
                 }
                 usbIpServer.executeDeviceControl(busId, action)

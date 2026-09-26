@@ -35,9 +35,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Userspace USB/IP server backed by Android's public USB Host APIs.
@@ -71,6 +73,7 @@ final class UsbIpServer implements AutoCloseable {
     private static final int MAX_TRANSFER = 4 * 1024 * 1024;
     private static final int CONTROL_TRANSFER_TIMEOUT_MS = 1000;
     private static final int BULK_OUT_TIMEOUT_MS = 1000;
+    private static final int ESP_FAST_BULK_OUT_BYTES = 512 * 1024;
     // Android's synchronous bulkTransfer cannot be interrupted while it is
     // blocked. USB/IP UNLINK only interrupts the worker thread, so a long
     // timeout leaves a cancelled serial read at the head of the endpoint FIFO
@@ -388,7 +391,15 @@ final class UsbIpServer implements AutoCloseable {
         private final Map<Integer, UsbEndpoint> endpoints = new ConcurrentHashMap<>();
         private final Map<Integer, ArrayDeque<byte[]>> pendingInput =
                 new ConcurrentHashMap<>();
+        private final Map<Integer, Future<?>> fastBulkOutTails =
+                new ConcurrentHashMap<>();
+        private final Semaphore fastBulkOutCapacity =
+                new Semaphore(ESP_FAST_BULK_OUT_BYTES);
         private final AtomicBoolean open = new AtomicBoolean(true);
+        private final AtomicBoolean espFastMode = new AtomicBoolean();
+        private final AtomicBoolean fastBulkOutFailed = new AtomicBoolean();
+        private final AtomicLong fastBulkOutRequests = new AtomicLong();
+        private final AtomicLong fastBulkOutBytes = new AtomicLong();
         private final boolean jLink;
         private final String sessionBusId;
         private final long sessionStartedNanos = System.nanoTime();
@@ -515,8 +526,18 @@ final class UsbIpServer implements AutoCloseable {
                                 + " packets=" + packetCount
                                 + " interval=" + interval
                                 + (endpoint == 0 ? " setup=" + hexBytes(setup) : ""));
+                        if (isEspFastBulkOut(submit)) {
+                            Future<?> tail = enqueueEspFastBulkOut(submit);
+                            fastBulkOutTails.put(submit.endpoint, tail);
+                            fastBulkOutRequests.incrementAndGet();
+                            fastBulkOutBytes.addAndGet(submit.outData.length);
+                            continue;
+                        }
+                        List<Future<?>> writeBarriers = espFastMode.get()
+                                && (submit.endpoint == 0 || submit.direction == USBIP_DIR_IN)
+                                ? snapshotFastBulkOutTails() : List.of();
                         FutureTask<Void> task = new FutureTask<>(() -> {
-                            execute(submit);
+                            execute(submit, writeBarriers);
                             return null;
                         });
                         active.put(sequence, task);
@@ -550,12 +571,13 @@ final class UsbIpServer implements AutoCloseable {
                     || device.getDeviceName().equals(candidate.getDeviceName()));
         }
 
-        private void execute(Submit submit) {
+        private void execute(Submit submit, List<Future<?>> writeBarriers) {
             long startedNanos = System.nanoTime();
             int status = ST_OK;
             int actualLength = 0;
             byte[] response = new byte[0];
             try {
+                awaitFastBulkOut(writeBarriers);
                 if (submit.endpoint == 0) {
                     TransferResult result = executeControl(submit);
                     status = result.status;
@@ -661,6 +683,75 @@ final class UsbIpServer implements AutoCloseable {
                     | (submit.direction == USBIP_DIR_IN ? 0x80 : 0);
             return transferQueues.computeIfAbsent(
                     key, ignored -> Executors.newSingleThreadExecutor());
+        }
+
+        private boolean isEspFastBulkOut(Submit submit) {
+            if (!espFastMode.get()
+                    || device.getVendorId() != CP210X_VENDOR_ID
+                    || submit.endpoint == 0
+                    || submit.direction != USBIP_DIR_OUT
+                    || submit.outData.length == 0
+                    || submit.outData.length > ESP_FAST_BULK_OUT_BYTES) {
+                return false;
+            }
+            UsbEndpoint endpoint = endpoints.get(submit.endpoint);
+            return endpoint != null
+                    && endpoint.getType() == UsbConstants.USB_ENDPOINT_XFER_BULK;
+        }
+
+        private Future<?> enqueueEspFastBulkOut(Submit submit) throws IOException {
+            try {
+                fastBulkOutCapacity.acquire(submit.outData.length);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IOException("ESP fast bulk-write queue interrupted", interrupted);
+            }
+            try {
+                UsbEndpoint endpoint = endpoints.get(submit.endpoint);
+                return transferQueue(submit).submit(() -> {
+                    try {
+                        int result = connection.bulkTransfer(
+                                endpoint, submit.outData, submit.outData.length,
+                                BULK_OUT_TIMEOUT_MS);
+                        if (result != submit.outData.length) {
+                            fastBulkOutFailed.set(true);
+                            failureCount.incrementAndGet();
+                            Log.e(TAG, "ESP fast USB/IP bulk write failed endpoint=0x"
+                                    + Integer.toHexString(endpoint.getAddress())
+                                    + " expected=" + submit.outData.length
+                                    + " actual=" + result);
+                            close();
+                        } else {
+                            completionCount.incrementAndGet();
+                        }
+                    } finally {
+                        fastBulkOutCapacity.release(submit.outData.length);
+                    }
+                });
+            } catch (RuntimeException exception) {
+                fastBulkOutCapacity.release(submit.outData.length);
+                throw new IOException("Unable to queue ESP fast bulk write", exception);
+            }
+        }
+
+        private List<Future<?>> snapshotFastBulkOutTails() {
+            return new ArrayList<>(fastBulkOutTails.values());
+        }
+
+        private void awaitFastBulkOut(List<Future<?>> barriers) throws IOException {
+            for (Future<?> barrier : barriers) {
+                try {
+                    barrier.get(30, TimeUnit.SECONDS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("ESP fast bulk-write drain interrupted", interrupted);
+                } catch (Exception exception) {
+                    throw new IOException("ESP fast bulk-write drain failed", exception);
+                }
+            }
+            if (fastBulkOutFailed.get()) {
+                throw new IOException("ESP fast bulk write failed");
+            }
         }
 
         private void preserveCancelledInput(
@@ -772,15 +863,17 @@ final class UsbIpServer implements AutoCloseable {
 
         void executeDeviceControl(String action) throws IOException {
             if (device.getVendorId() != CP210X_VENDOR_ID) {
-                throw new IOException("ESP32 reset requires a CP210x USB bridge");
+                throw new IOException("ESP32 device control requires a CP210x USB bridge");
             }
             Future<Integer> result = transferQueues
                     .computeIfAbsent(0, ignored -> Executors.newSingleThreadExecutor())
                     .submit(() -> runDeviceControl(action));
             try {
-                int status = result.get(5, TimeUnit.SECONDS);
+                int status = result.get(
+                        "esp32.usbip-fast-mode.disable".equals(action) ? 35 : 5,
+                        TimeUnit.SECONDS);
                 if (status < 0) {
-                    throw new IOException("USB modem-control transfer failed");
+                    throw new IOException("ESP32 USB device control failed");
                 }
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
@@ -792,6 +885,27 @@ final class UsbIpServer implements AutoCloseable {
         }
 
         private int runDeviceControl(String action) {
+            if ("esp32.usbip-fast-mode.enable".equals(action)) {
+                fastBulkOutFailed.set(false);
+                fastBulkOutRequests.set(0);
+                fastBulkOutBytes.set(0);
+                espFastMode.set(true);
+                Log.i(TAG, "ESP esptool USB/IP fast bulk-write mode enabled");
+                return ST_OK;
+            }
+            if ("esp32.usbip-fast-mode.disable".equals(action)) {
+                espFastMode.set(false);
+                try {
+                    awaitFastBulkOut(snapshotFastBulkOutTails());
+                    fastBulkOutTails.clear();
+                    Log.i(TAG, "ESP esptool USB/IP fast bulk-write mode disabled requests="
+                            + fastBulkOutRequests.get() + " bytes=" + fastBulkOutBytes.get());
+                    return ST_OK;
+                } catch (IOException exception) {
+                    Log.e(TAG, "Unable to drain ESP fast bulk writes", exception);
+                    return EIO;
+                }
+            }
             if ("esp32.enter-bootloader".equals(action)) {
                 int[] prefix = {0x300, 0x303, 0x302};
                 for (int value : prefix) {
