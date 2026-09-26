@@ -322,23 +322,29 @@ internal class UsbIpWebSocketBridge(
         require(profile.matches(Regex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"))) { "Invalid flash profile" }
         require(size > 0) { "Firmware size must be positive" }
         require(sha256.matches(Regex("^[a-fA-F0-9]{64}$"))) { "Firmware SHA-256 is invalid" }
-        require(baudRate in setOf(115200, 230400, 460800, 921600)) { "Unsupported ESP flash baud rate" }
-        require(ackWindow in 1..8) { "ESP flash ACK window must be between 1 and 8" }
-        require(timeoutSeconds in 60..1800) { "ESP flash timeout must be between 1 and 30 minutes" }
-        require(esptoolConfig in setOf("standard", "high-latency")) { "Unsupported esptool configuration preset" }
+        val isEspProfile = profile.startsWith("esp32")
+        if (isEspProfile) {
+            require(baudRate in setOf(115200, 230400, 460800, 921600)) { "Unsupported ESP flash baud rate" }
+            require(ackWindow in 1..8) { "ESP flash ACK window must be between 1 and 8" }
+            require(esptoolConfig in setOf("standard", "high-latency")) { "Unsupported esptool configuration preset" }
+        }
+        require(timeoutSeconds in 60..1800) { "Flash timeout must be between 1 and 30 minutes" }
         val socket = webSocket ?: error("USB flash tunnel is not running")
         synchronized(creditLock) { uploadCredit = 0 }
-        check(socket.send(JSONObject(mapOf(
+        val request = mutableMapOf<String, Any>(
             "type" to "flash.start",
             "jobId" to jobId,
             "profile" to profile,
-            "baudRate" to baudRate,
-            "ackWindow" to ackWindow,
             "timeoutSeconds" to timeoutSeconds,
-            "esptoolConfig" to esptoolConfig,
             "size" to size,
             "sha256" to sha256.lowercase(),
-        )).toString())) { "WebSocket rejected flash.start" }
+        )
+        if (isEspProfile) {
+            request["baudRate"] = baudRate
+            request["ackWindow"] = ackWindow
+            request["esptoolConfig"] = esptoolConfig
+        }
+        check(socket.send(JSONObject(request).toString())) { "WebSocket rejected flash.start" }
 
         thread(name = "edgez-firmware-upload", isDaemon = true) {
             runCatching {
@@ -360,22 +366,28 @@ internal class UsbIpWebSocketBridge(
             "Firmware URL must be a versioned GitHub release asset"
         }
         require(sha256.matches(Regex("^[a-fA-F0-9]{64}$"))) { "Firmware SHA-256 is invalid" }
-        require(baudRate in setOf(115200, 230400, 460800, 921600)) { "Unsupported ESP flash baud rate" }
-        require(ackWindow in 1..8) { "ESP flash ACK window must be between 1 and 8" }
-        require(timeoutSeconds in 60..1800) { "ESP flash timeout must be between 1 and 30 minutes" }
-        require(esptoolConfig in setOf("standard", "high-latency")) { "Unsupported esptool configuration preset" }
+        val isEspProfile = profile.startsWith("esp32")
+        if (isEspProfile) {
+            require(baudRate in setOf(115200, 230400, 460800, 921600)) { "Unsupported ESP flash baud rate" }
+            require(ackWindow in 1..8) { "ESP flash ACK window must be between 1 and 8" }
+            require(esptoolConfig in setOf("standard", "high-latency")) { "Unsupported esptool configuration preset" }
+        }
+        require(timeoutSeconds in 60..1800) { "Flash timeout must be between 1 and 30 minutes" }
         val socket = webSocket ?: error("USB flash tunnel is not running")
-        check(socket.send(JSONObject(mapOf(
+        val request = mutableMapOf<String, Any>(
             "type" to "flash.start",
             "jobId" to jobId,
             "profile" to profile,
-            "baudRate" to baudRate,
-            "ackWindow" to ackWindow,
             "timeoutSeconds" to timeoutSeconds,
-            "esptoolConfig" to esptoolConfig,
             "firmwareUrl" to firmwareUrl,
             "sha256" to sha256.lowercase(),
-        )).toString())) { "WebSocket rejected flash.start" }
+        )
+        if (isEspProfile) {
+            request["baudRate"] = baudRate
+            request["ackWindow"] = ackWindow
+            request["esptoolConfig"] = esptoolConfig
+        }
+        check(socket.send(JSONObject(request).toString())) { "WebSocket rejected flash.start" }
     }
 
     fun cancelFlash(jobId: String) {
