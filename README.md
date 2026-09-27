@@ -13,6 +13,8 @@ iOS is not yet implemented.
 - chunked encrypted voice-message protocol
 - native Opus/AMR voice-message recording and playback
 - device provisioning settings and Lua driver transfer
+- UI-independent ESP32, nRF54, and H7608 provisioning, including Android
+  app-scoped SoftAP connections and upstream Wi-Fi setup
 - BLE firmware OTA with acknowledged writes, progress, and cancellation
 - Android USB/IP host support for remote ESP32, J-Link, and OpenOCD flashing
 - verified Android React Native bundle updates through the firmware OTA proxy,
@@ -119,6 +121,49 @@ await session.sendTextMessage(node.nodeNum, 'Hello mesh');
 Applications that use another state architecture can construct `EdgezMeshSdk`
 directly. Tests can inject an `EdgezPlatformTransport` without Android or BLE
 hardware.
+
+## Device provisioning
+
+`EdgezProvisioningManager` owns discovery, permissions, connections, protocol
+details, upstream Wi-Fi scanning, configuration ordering, persistence checks,
+and cleanup. The application is responsible only for presenting and styling
+the returned devices and collecting configuration fields:
+
+```ts
+import {EdgezProvisioningManager} from '@edgez/react-native-sdk';
+
+const provisioning = new EdgezProvisioningManager();
+const {devices, warnings} = await provisioning.scan();
+const device = devices[0];
+
+await provisioning.connect(device, 'abcd1234');
+const networks = device.supportsUpstreamWifi
+  ? await provisioning.scanUpstreamWifi(device)
+  : [];
+
+await provisioning.configure(device, {
+  clientId,
+  username: device.serial,
+  password,
+  projectId,
+  channel,
+  meshId,
+  passphrase,
+  country,
+  halowChannel,
+  wifiUpstream: true,
+  ...(device.kind === 'h7608' ? {softapSsid: userEnteredApName} : {}),
+}, {ssid: networks[0].ssid, passphrase: upstreamPassword});
+
+await provisioning.disconnect(device);
+```
+
+On H7608, Android associates with `PROV_<serial>` as a local-only,
+application-scoped Wi-Fi network. Only provisioning HTTP requests use that
+network; Appwrite and other Internet traffic retain the phone's default route.
+The SDK stages upstream Wi-Fi first, then calls `/config`; a result is accepted
+only when the gateway returns both `ok` and `persisted`. After the gateway
+applies the configuration, its AP uses `softapSsid`.
 
 ## Remote USB flashing (Android)
 

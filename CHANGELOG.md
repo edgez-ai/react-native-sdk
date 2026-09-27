@@ -164,3 +164,9 @@
   sensor data, provisioning, OTA, voice, and channel-management APIs.
 - Added Expo Android and native macOS and Windows example applications.
 - Added authenticated BLE reconnect support and Windows diagnostic logging.
+# 0.1.25
+
+- Added a UI-independent provisioning manager for ESP32, nRF54, and HT-H7608,
+  including upstream Wi-Fi scanning, persistence checks, and disconnect cleanup.
+- Added Android app-scoped H7608 SoftAP connections. Provisioning sockets are
+  pinned to local Wi-Fi while Appwrite traffic retains the phone's default route.
