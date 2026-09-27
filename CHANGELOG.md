@@ -170,3 +170,10 @@
   including upstream Wi-Fi scanning, persistence checks, and disconnect cleanup.
 - Added Android app-scoped H7608 SoftAP connections. Provisioning sockets are
   pinned to local Wi-Fi while Appwrite traffic retains the phone's default route.
+
+# 0.1.26
+
+- Added nRF54L CTRL-AP recovery before CMSIS-DAP flashing when access-port
+  protection is enabled, with complete erase-state handling and safe reconnects.
+- Moved remaining device-specific provisioning payload normalization and UI
+  capability metadata into the shared provisioning API.

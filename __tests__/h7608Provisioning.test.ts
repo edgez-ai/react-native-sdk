@@ -1,5 +1,9 @@
 import {H7608ProvisioningDevice} from '../src/H7608Provisioning';
 import type {EdgezPlatformTransport} from '../src/EdgezMeshSdk';
+import {EdgezProvisioningManager, type EdgezProvisioningConfig, type EdgezProvisioningDevice} from '../src/Provisioning';
+
+jest.mock('react-native-ble-plx', () => ({BleManager: jest.fn()}));
+jest.mock('@orbital-systems/react-native-esp-idf-provisioning', () => ({}));
 
 class FakeTransport implements EdgezPlatformTransport {
   calls: Array<{method: string; arguments_?: Record<string, unknown>}> = [];
@@ -50,5 +54,31 @@ describe('H7608 SoftAP provisioning', () => {
       method: 'POST', path: '/config', pop: 'abcd1234',
       body: expect.stringContaining('"softapSsid":"Barn Gateway"'),
     });
+  });
+
+  it('keeps device-specific config shaping inside the SDK', async () => {
+    let received: EdgezProvisioningConfig | undefined;
+    const device: EdgezProvisioningDevice = {
+      kind: 'nrf54', id: 'nrf-1', name: 'NRF_AABBCCDDEEFF', serial: 'AABBCCDDEEFF',
+      transport: 'ble', category: 'tracker', firmwareTarget: 'nrf54l15',
+      requiresProofOfPossession: false, requiresDeviceName: false, deviceNameMaxLength: 128,
+      supportsUpstreamWifi: false, supportsDeviceGps: true,
+      connect: async () => undefined,
+      configure: async config => { received = config; return {ok: true, persisted: true}; },
+      scanUpstreamWifi: async () => [],
+      provisionUpstreamWifi: async () => undefined,
+      disconnect: async () => undefined,
+    };
+    await new EdgezProvisioningManager().configure(device, {
+      clientId: 'client-1', username: device.serial, password: 'secret', projectId: 'project-1',
+      channel: 'status', meshId: 'farm-mesh', passphrase: 'mesh-secret', country: 'US',
+      halowChannel: 27, wifiUpstream: false, deviceName: 'Long 🐄 tracker name', useDeviceGps: true,
+    });
+    expect(received).toMatchObject({
+      halowFrequencyKHz: 915500,
+      deviceName: 'Long 🐄 tracker name',
+      useDeviceGps: true,
+    });
+    expect(received).not.toHaveProperty('softapSsid');
   });
 });

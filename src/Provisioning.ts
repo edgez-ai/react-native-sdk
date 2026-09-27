@@ -14,6 +14,8 @@ import {
 } from './H7608Provisioning';
 
 export type EdgezProvisioningKind = 'esp32' | 'nrf54' | 'h7608';
+export type EdgezProvisioningTransport = 'ble' | 'softap';
+export type EdgezProvisioningDeviceCategory = 'tracker' | 'gateway';
 export interface EdgezProvisioningWifiNetwork {
   ssid: string;
   bssid?: string;
@@ -28,6 +30,12 @@ export type EdgezProvisioningConfig = H7608ProvisioningConfig & {
   wifiUpstream?: boolean;
 };
 
+export type EdgezProvisioningInput = Omit<EdgezProvisioningConfig,
+  'halowFrequencyKHz' | 'softapSsid'> & {
+  deviceName?: string;
+  useDeviceGps?: boolean;
+};
+
 export interface EdgezProvisioningResult {
   ok?: boolean;
   persisted?: boolean;
@@ -40,6 +48,12 @@ export interface EdgezProvisioningDevice {
   readonly id: string;
   readonly name: string;
   readonly serial: string;
+  readonly transport: EdgezProvisioningTransport;
+  readonly category: EdgezProvisioningDeviceCategory;
+  readonly firmwareTarget: string;
+  readonly requiresProofOfPossession: boolean;
+  readonly requiresDeviceName: boolean;
+  readonly deviceNameMaxLength: number;
   readonly supportsUpstreamWifi: boolean;
   readonly supportsDeviceGps: boolean;
   connect(pop?: string): Promise<void>;
@@ -62,6 +76,12 @@ function serialFromName(name: string): string {
 
 class Esp32ProvisioningDevice implements EdgezProvisioningDevice {
   readonly kind = 'esp32' as const;
+  readonly transport = 'ble' as const;
+  readonly category = 'gateway' as const;
+  readonly firmwareTarget = 'heltec-hc33';
+  readonly requiresProofOfPossession = true;
+  readonly requiresDeviceName = false;
+  readonly deviceNameMaxLength = 128;
   readonly supportsUpstreamWifi = true;
   readonly supportsDeviceGps = false;
   readonly id: string;
@@ -119,6 +139,12 @@ function matchingConfirmation(value: string | null, confirmationId: string): Edg
 
 class Nrf54ProvisioningDevice implements EdgezProvisioningDevice {
   readonly kind = 'nrf54' as const;
+  readonly transport = 'ble' as const;
+  readonly category = 'tracker' as const;
+  readonly firmwareTarget = 'nrf54l15';
+  readonly requiresProofOfPossession = false;
+  readonly requiresDeviceName = false;
+  readonly deviceNameMaxLength = 128;
   readonly supportsUpstreamWifi = false;
   readonly supportsDeviceGps = true;
   readonly serial: string;
@@ -175,6 +201,12 @@ class Nrf54ProvisioningDevice implements EdgezProvisioningDevice {
 
 class UnifiedH7608ProvisioningDevice implements EdgezProvisioningDevice {
   readonly kind = 'h7608' as const;
+  readonly transport = 'softap' as const;
+  readonly category = 'gateway' as const;
+  readonly firmwareTarget = 'heltec-h7608-v1';
+  readonly requiresProofOfPossession = true;
+  readonly requiresDeviceName = true;
+  readonly deviceNameMaxLength = 32;
   readonly supportsUpstreamWifi = true;
   readonly supportsDeviceGps = false;
   readonly id: string;
@@ -250,9 +282,10 @@ export class EdgezProvisioningManager {
 
   async configure(
     device: EdgezProvisioningDevice,
-    config: EdgezProvisioningConfig,
+    input: EdgezProvisioningInput,
     upstreamWifi?: {ssid: string; passphrase: string},
   ): Promise<EdgezProvisioningResult> {
+    const config = provisioningConfig(device, input);
     if (device.kind === 'h7608' && upstreamWifi) {
       await device.provisionUpstreamWifi(upstreamWifi.ssid, upstreamWifi.passphrase);
     }
@@ -269,6 +302,71 @@ export class EdgezProvisioningManager {
   disconnect(device?: EdgezProvisioningDevice | null): Promise<void> {
     return device ? device.disconnect() : Promise.resolve();
   }
+}
+
+function provisioningConfig(
+  device: EdgezProvisioningDevice,
+  input: EdgezProvisioningInput,
+): EdgezProvisioningConfig {
+  const deviceName = input.deviceName?.trim() || '';
+  if (device.requiresDeviceName && !deviceName) {
+    throw new Error('A device name is required');
+  }
+  if (deviceName.length > device.deviceNameMaxLength) {
+    throw new Error(`Device name must not exceed ${device.deviceNameMaxLength} characters`);
+  }
+  if (device.kind === 'h7608' && utf8Bytes(deviceName).length > device.deviceNameMaxLength) {
+    throw new Error(`Device name must not exceed ${device.deviceNameMaxLength} UTF-8 bytes`);
+  }
+  const config: EdgezProvisioningConfig = {
+    clientId: input.clientId,
+    username: input.username,
+    password: input.password,
+    projectId: input.projectId,
+    channel: input.channel,
+    meshId: input.meshId,
+    passphrase: input.passphrase,
+    country: input.country,
+    halowChannel: input.halowChannel,
+    wifiUpstream: input.wifiUpstream,
+    latitude: input.latitude,
+    longitude: input.longitude,
+  };
+  if (device.kind === 'h7608') config.softapSsid = deviceName;
+  if (device.kind === 'nrf54') {
+    config.halowFrequencyKHz = halowFrequencyKHz(input.country, input.halowChannel);
+    config.deviceName = utf8LimitedName(deviceName || device.serial, 64);
+    config.useDeviceGps = input.useDeviceGps === true;
+    if (config.useDeviceGps && input.latitude == null && input.longitude == null) {
+      delete config.latitude;
+      delete config.longitude;
+    }
+  }
+  return config;
+}
+
+function halowFrequencyKHz(country: string, channel: number): number {
+  const code = country.toUpperCase();
+  let baseMHz: number;
+  if (['AU', 'CA', 'NZ', 'US'].includes(code)) baseMHz = 902;
+  else if (code === 'EU' || code === 'IN' || (code === 'GB' && channel <= 9)) baseMHz = 863;
+  else if (code === 'GB') baseMHz = 901.4;
+  else if (code === 'JP') baseMHz = 916.5;
+  else if (code === 'KR') baseMHz = 917.5;
+  else throw new Error(`Unsupported HaLow country: ${country}`);
+  return Math.round((baseMHz + channel / 2) * 1000);
+}
+
+function utf8LimitedName(value: string, maxBytes: number): string {
+  let result = '';
+  let bytes = 0;
+  for (const character of value) {
+    const count = utf8Bytes(character).length;
+    if (bytes + count > maxBytes) break;
+    result += character;
+    bytes += count;
+  }
+  return result;
 }
 
 async function requestProvisioningPermissions(): Promise<void> {

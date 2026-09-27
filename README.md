@@ -152,7 +152,8 @@ await provisioning.configure(device, {
   country,
   halowChannel,
   wifiUpstream: true,
-  ...(device.kind === 'h7608' ? {softapSsid: userEnteredApName} : {}),
+  deviceName: userEnteredName,
+  useDeviceGps,
 }, {ssid: networks[0].ssid, passphrase: upstreamPassword});
 
 await provisioning.disconnect(device);
@@ -163,7 +164,12 @@ application-scoped Wi-Fi network. Only provisioning HTTP requests use that
 network; Appwrite and other Internet traffic retain the phone's default route.
 The SDK stages upstream Wi-Fi first, then calls `/config`; a result is accepted
 only when the gateway returns both `ok` and `persisted`. After the gateway
-applies the configuration, its AP uses `softapSsid`.
+applies the configuration, its AP uses `deviceName`. Device-specific payload
+fields—including the H7608 SoftAP SSID and nRF54 HaLow frequency and BLE-safe
+name—are derived inside the SDK. UI code can use each device's capability and
+presentation metadata such as `requiresProofOfPossession`,
+`requiresDeviceName`, `supportsUpstreamWifi`, `supportsDeviceGps`,
+`deviceNameMaxLength`, `category`, and `firmwareTarget`.
 
 ## Remote USB flashing (Android)
 
