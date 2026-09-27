@@ -75,6 +75,10 @@ export interface EdgezProvisioningScanResult {
   warnings: string[];
 }
 
+function isEmptyProvisioningScan(error: unknown): boolean {
+  return /no (?:bluetooth|wi-?fi) device found with given prefix/i.test(String(error));
+}
+
 function serialFromName(name: string): string {
   const match = /^(?:PROV|NRF)_([A-F0-9]{12})$/i.exec(name);
   if (!match) throw new Error(`Invalid provisioning name: ${name}`);
@@ -243,7 +247,9 @@ export class EdgezProvisioningManager {
       esp = (await ESPProvisionManager.searchESPDevices('PROV_', ESPTransport.ble, ESPSecurity.secure))
         .filter(device => /^PROV_[A-F0-9]{12}$/i.test(device.name) && !nrfNames.has(device.name.toLowerCase()))
         .map(device => new EspIdfProvisioningDevice(device));
-    } catch (error) { warnings.push(`ESP32 BLE scan: ${String(error)}`); }
+    } catch (error) {
+      if (!isEmptyProvisioningScan(error)) warnings.push(`ESP32 BLE scan: ${String(error)}`);
+    }
     let h7608: EspIdfProvisioningDevice[] = [];
     try {
       const discovered = await ESPProvisionManager.searchESPDevices('PROV_', ESPTransport.softap, ESPSecurity.unsecure);
@@ -254,7 +260,9 @@ export class EdgezProvisioningManager {
           security: ESPSecurity.unsecure,
         })),
       );
-    } catch (error) { warnings.push(`ESP-IDF SoftAP scan: ${String(error)}`); }
+    } catch (error) {
+      if (!isEmptyProvisioningScan(error)) warnings.push(`ESP-IDF SoftAP scan: ${String(error)}`);
+    }
 
     return {devices: [...esp, ...nrf, ...h7608], warnings};
   }

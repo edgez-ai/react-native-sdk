@@ -54,6 +54,7 @@ internal class UsbIpWebSocketBridge(
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
     private val closed = AtomicBoolean(false)
+    private val webSocketAvailable = AtomicBoolean(false)
     private val creditLock = Object()
     private val localWriteQueue = ArrayBlockingQueue<ByteArray>(MAX_PENDING_LOCAL_FRAMES)
     private val websocketSendQueue = ArrayBlockingQueue<ByteArray>(MAX_PENDING_WEBSOCKET_FRAMES)
@@ -119,6 +120,7 @@ internal class UsbIpWebSocketBridge(
                     socket.cancel()
                     return
                 }
+                webSocketAvailable.set(true)
                 socket.send(JSONObject(mapOf("type" to "hello", "role" to "mobile", "busId" to busId)).toString())
                 connectLocalBridge(socket, socketName, closeOnFailure = true)
             }
@@ -177,16 +179,19 @@ internal class UsbIpWebSocketBridge(
             }
 
             override fun onClosing(socket: WebSocket, code: Int, reason: String) {
+                webSocketAvailable.set(false)
                 socket.close(code, reason)
             }
 
             override fun onClosed(socket: WebSocket, code: Int, reason: String) {
+                webSocketAvailable.set(false)
                 Log.i(TAG, "USB flash WebSocket closed code=$code reason=$reason")
                 closeLocalSocket()
                 if (!closed.get()) eventListener("disconnected", "$code $reason".trim())
             }
 
             override fun onFailure(socket: WebSocket, error: Throwable, response: Response?) {
+                webSocketAvailable.set(false)
                 Log.e(TAG, "USB flash WebSocket failed http=${response?.code}", error)
                 closeLocalSocket()
                 if (!closed.get()) eventListener("failed", error.message)
@@ -522,7 +527,9 @@ internal class UsbIpWebSocketBridge(
         val digest = upload.digest.digest().joinToString("") { "%02x".format(it) }
         if (upload.received != upload.expectedSize || digest != upload.expectedSha256) {
             upload.file.delete()
-            bridgeSocketName?.let { connectLocalBridge(socket, it, closeOnFailure = false) }
+            if (webSocketAvailable.get()) {
+                bridgeSocketName?.let { connectLocalBridge(socket, it, closeOnFailure = false) }
+            }
             activeDeviceFlashRequestId = null
             activeDeviceFlashJobId = null
             sendDeviceFlashStatus(socket, upload, "failed", "Streamed firmware size or SHA-256 does not match")
@@ -584,7 +591,9 @@ internal class UsbIpWebSocketBridge(
             put("received", received)
             put("size", size)
         }
-        check(socket.send(response.toString())) { "WebSocket rejected mobile flash status" }
+        if (!webSocketAvailable.get() || !socket.send(response.toString())) {
+            Log.w(TAG, "USB flash status could not be delivered state=$state job=${upload.jobId}; WebSocket is closed")
+        }
     }
 
     private fun uploadFirmware(socket: WebSocket, input: InputStream, expectedSize: Long) {
@@ -642,6 +651,7 @@ internal class UsbIpWebSocketBridge(
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        webSocketAvailable.set(false)
         synchronized(creditLock) { creditLock.notifyAll() }
         deviceFlashUpload?.let { upload ->
             runCatching { upload.output.close() }

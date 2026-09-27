@@ -70,6 +70,18 @@ describe('ESP-IDF BLE and SoftAP provisioning', () => {
     expect(pluginDevice.sendData).toHaveBeenCalledWith('mqtt-config', expect.stringContaining('"softapSsid":"Barn Gateway"'));
   });
 
+  it('treats an empty native provisioning scan as a normal empty result', async () => {
+    jest.useFakeTimers();
+    mockSearch
+      .mockRejectedValueOnce(new Error('java.lang.Error: No bluetooth device found with given prefix'))
+      .mockRejectedValueOnce(new Error('java.lang.Error: No wifi device found with given prefix'));
+
+    const scan = new EdgezProvisioningManager().scan();
+    await jest.advanceTimersByTimeAsync(6000);
+    await expect(scan).resolves.toEqual({devices: [], warnings: []});
+    jest.useRealTimers();
+  });
+
   it('keeps device-specific config shaping inside the SDK', async () => {
     let received: EdgezProvisioningConfig | undefined;
     const device: EdgezProvisioningDevice = {

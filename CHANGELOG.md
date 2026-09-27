@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.30
+
+- Treat empty ESP-IDF BLE and SoftAP provisioning scans as a normal empty
+  result instead of exposing native Java errors to applications.
+- Prevent a closed USB flash WebSocket from crashing Android while the local
+  CMSIS-DAP programmer reports its final status, and avoid reconnecting USB/IP
+  to a WebSocket that has already closed.
+
 ## 0.1.29
 
 - Preserve nullable latitude and longitude values in the unified provisioning
