@@ -2,16 +2,11 @@ import {fromByteArray, toByteArray} from 'base64-js';
 import {PermissionsAndroid, Platform, type Permission} from 'react-native';
 import {BleManager, type Device as BleDevice} from 'react-native-ble-plx';
 import {
+  ESPDevice,
   ESPProvisionManager,
   ESPSecurity,
   ESPTransport,
-  type ESPDevice,
-  type ESPWifiList,
 } from '@orbital-systems/react-native-esp-idf-provisioning';
-import {
-  H7608ProvisioningDevice,
-  type H7608ProvisioningConfig,
-} from './H7608Provisioning';
 
 export type EdgezProvisioningKind = 'esp32' | 'nrf54' | 'h7608';
 export type EdgezProvisioningTransport = 'ble' | 'softap';
@@ -23,12 +18,24 @@ export interface EdgezProvisioningWifiNetwork {
   auth?: number;
   secure?: boolean;
 }
-export type EdgezProvisioningConfig = H7608ProvisioningConfig & {
+export interface EdgezProvisioningConfig {
+  clientId: string;
+  username: string;
+  password: string;
+  projectId: string;
+  channel: string;
+  meshId: string;
+  passphrase: string;
+  country: string;
+  halowChannel: number;
+  softapSsid?: string;
+  latitude?: number;
+  longitude?: number;
   halowFrequencyKHz?: number;
   deviceName?: string;
   useDeviceGps?: boolean;
   wifiUpstream?: boolean;
-};
+}
 
 export type EdgezProvisioningInput = Omit<EdgezProvisioningConfig,
   'halowFrequencyKHz' | 'softapSsid'> & {
@@ -74,14 +81,14 @@ function serialFromName(name: string): string {
   return match[1]!.toUpperCase();
 }
 
-class Esp32ProvisioningDevice implements EdgezProvisioningDevice {
-  readonly kind = 'esp32' as const;
-  readonly transport = 'ble' as const;
+class EspIdfProvisioningDevice implements EdgezProvisioningDevice {
+  readonly kind: 'esp32' | 'h7608';
+  readonly transport: 'ble' | 'softap';
   readonly category = 'gateway' as const;
-  readonly firmwareTarget = 'heltec-hc33';
+  readonly firmwareTarget: 'heltec-hc33' | 'heltec-h7608-v1';
   readonly requiresProofOfPossession = true;
-  readonly requiresDeviceName = false;
-  readonly deviceNameMaxLength = 128;
+  readonly requiresDeviceName: boolean;
+  readonly deviceNameMaxLength: number;
   readonly supportsUpstreamWifi = true;
   readonly supportsDeviceGps = false;
   readonly id: string;
@@ -89,14 +96,22 @@ class Esp32ProvisioningDevice implements EdgezProvisioningDevice {
   readonly serial: string;
 
   constructor(private readonly device: ESPDevice) {
+    const softap = device.transport === ESPTransport.softap;
+    this.kind = softap ? 'h7608' : 'esp32';
+    this.transport = softap ? 'softap' : 'ble';
+    this.firmwareTarget = softap ? 'heltec-h7608-v1' : 'heltec-hc33';
+    this.requiresDeviceName = softap;
+    this.deviceNameMaxLength = softap ? 32 : 128;
     this.id = device.name;
     this.name = device.name;
     this.serial = serialFromName(device.name);
   }
 
   async connect(pop?: string): Promise<void> {
-    if (!pop?.trim()) throw new Error('A proof of possession is required for the ESP32');
-    await this.device.connect(pop.trim());
+    const secret = pop?.trim();
+    if (!secret) throw new Error(`A provisioning password is required for the ${this.kind === 'h7608' ? 'H7608' : 'ESP32'}`);
+    if (this.kind === 'h7608') await this.device.connect(null, secret, null);
+    else await this.device.connect(secret, null, null);
   }
 
   async configure(config: EdgezProvisioningConfig): Promise<EdgezProvisioningResult> {
@@ -199,41 +214,6 @@ class Nrf54ProvisioningDevice implements EdgezProvisioningDevice {
   }
 }
 
-class UnifiedH7608ProvisioningDevice implements EdgezProvisioningDevice {
-  readonly kind = 'h7608' as const;
-  readonly transport = 'softap' as const;
-  readonly category = 'gateway' as const;
-  readonly firmwareTarget = 'heltec-h7608-v1';
-  readonly requiresProofOfPossession = true;
-  readonly requiresDeviceName = true;
-  readonly deviceNameMaxLength = 32;
-  readonly supportsUpstreamWifi = true;
-  readonly supportsDeviceGps = false;
-  readonly id: string;
-  readonly name: string;
-  readonly serial: string;
-  private pop = '';
-
-  constructor(private readonly device: H7608ProvisioningDevice) {
-    this.id = device.network.bssid || device.name;
-    this.name = device.name;
-    this.serial = serialFromName(device.name);
-  }
-
-  async connect(pop?: string): Promise<void> {
-    if (!pop?.trim()) throw new Error('A proof of possession is required for the H7608');
-    this.pop = pop.trim();
-    await this.device.connect(this.pop);
-  }
-  configure(config: EdgezProvisioningConfig): Promise<EdgezProvisioningResult> { return this.device.configure(config, this.pop); }
-  scanUpstreamWifi(): Promise<EdgezProvisioningWifiNetwork[]> { return this.device.scanUpstreamWifi(this.pop); }
-  async provisionUpstreamWifi(ssid: string, passphrase: string): Promise<void> {
-    const result = await this.device.provisionUpstreamWifi(ssid, passphrase, this.pop);
-    if (!result.ok || !result.persisted) throw new Error(result.error || 'The H7608 did not persist upstream Wi-Fi');
-  }
-  disconnect(): Promise<void> { this.pop = ''; return this.device.disconnect(); }
-}
-
 async function scanNrf54(): Promise<Nrf54ProvisioningDevice[]> {
   const found = new Map<string, Nrf54ProvisioningDevice>();
   const manager = bleManager();
@@ -255,23 +235,26 @@ export class EdgezProvisioningManager {
   async scan(): Promise<EdgezProvisioningScanResult> {
     await requestProvisioningPermissions();
     const warnings: string[] = [];
-    const [nrfScan, espScan, h7608Scan] = await Promise.allSettled([
-      scanNrf54(),
-      ESPProvisionManager.searchESPDevices('PROV_', ESPTransport.ble, ESPSecurity.secure),
-      H7608ProvisioningDevice.scan(),
-    ]);
-    const nrf = nrfScan.status === 'fulfilled' ? nrfScan.value : [];
-    if (nrfScan.status === 'rejected') warnings.push(`nRF54 scan: ${String(nrfScan.reason)}`);
+    let nrf: Nrf54ProvisioningDevice[] = [];
+    try { nrf = await scanNrf54(); } catch (error) { warnings.push(`nRF54 scan: ${String(error)}`); }
     const nrfNames = new Set(nrf.map(device => device.name.toLowerCase()));
-    const esp = espScan.status === 'fulfilled'
-      ? espScan.value.filter(device => /^PROV_[A-F0-9]{12}$/i.test(device.name) && !nrfNames.has(device.name.toLowerCase()))
-        .map(device => new Esp32ProvisioningDevice(device))
-      : [];
-    if (espScan.status === 'rejected') warnings.push(`ESP32 scan: ${String(espScan.reason)}`);
-    const h7608 = h7608Scan.status === 'fulfilled'
-      ? h7608Scan.value.map(device => new UnifiedH7608ProvisioningDevice(device))
-      : [];
-    if (h7608Scan.status === 'rejected') warnings.push(`H7608 scan: ${String(h7608Scan.reason)}`);
+    let esp: EspIdfProvisioningDevice[] = [];
+    try {
+      esp = (await ESPProvisionManager.searchESPDevices('PROV_', ESPTransport.ble, ESPSecurity.secure))
+        .filter(device => /^PROV_[A-F0-9]{12}$/i.test(device.name) && !nrfNames.has(device.name.toLowerCase()))
+        .map(device => new EspIdfProvisioningDevice(device));
+    } catch (error) { warnings.push(`ESP32 BLE scan: ${String(error)}`); }
+    let h7608: EspIdfProvisioningDevice[] = [];
+    try {
+      const discovered = await ESPProvisionManager.searchESPDevices('PROV_', ESPTransport.softap, ESPSecurity.unsecure);
+      h7608 = discovered.filter(device => /^PROV_[A-F0-9]{12}$/i.test(device.name)).map(device =>
+        new EspIdfProvisioningDevice(new ESPDevice({
+          name: device.name,
+          transport: ESPTransport.softap,
+          security: ESPSecurity.unsecure,
+        })),
+      );
+    } catch (error) { warnings.push(`ESP-IDF SoftAP scan: ${String(error)}`); }
 
     return {devices: [...esp, ...nrf, ...h7608], warnings};
   }

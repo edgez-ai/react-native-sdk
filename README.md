@@ -13,8 +13,8 @@ iOS is not yet implemented.
 - chunked encrypted voice-message protocol
 - native Opus/AMR voice-message recording and playback
 - device provisioning settings and Lua driver transfer
-- UI-independent ESP32, nRF54, and H7608 provisioning, including Android
-  app-scoped SoftAP connections and upstream Wi-Fi setup
+- UI-independent ESP32, nRF54, and H7608 provisioning over ESP-IDF BLE and
+  SoftAP transports, including upstream Wi-Fi setup
 - BLE firmware OTA with acknowledged writes, progress, and cancellation
 - Android USB/IP host support for remote ESP32, J-Link, and OpenOCD flashing
 - verified Android React Native bundle updates through the firmware OTA proxy,
@@ -159,13 +159,13 @@ await provisioning.configure(device, {
 await provisioning.disconnect(device);
 ```
 
-On H7608, Android associates with `PROV_<serial>` as a local-only,
-application-scoped Wi-Fi network. Only provisioning HTTP requests use that
-network; Appwrite and other Internet traffic retain the phone's default route.
-The SDK uses the standard ESP-IDF `prov-scan` and `prov-config` endpoints for
-upstream Wi-Fi, then calls the custom `mqtt-config` endpoint; a result is accepted
-only when the gateway returns both `ok` and `persisted`. After the gateway
-applies the configuration, its AP uses `deviceName`. Device-specific payload
+ESP32 BLE and H7608 SoftAP discovery, connection, Wi-Fi scanning, and upstream
+Wi-Fi provisioning all use `@orbital-systems/react-native-esp-idf-provisioning`.
+The H7608 implements the standard ESP-IDF Security 0 `prov-session`, `prov-scan`,
+and `prov-config` endpoints; the SDK calls its custom `mqtt-config` endpoint
+before completing upstream Wi-Fi provisioning. A configuration result is
+accepted only when the gateway returns both `ok` and `persisted`. After the
+gateway applies the configuration, its AP uses `deviceName`. Device-specific payload
 fields—including the H7608 SoftAP SSID and nRF54 HaLow frequency and BLE-safe
 name—are derived inside the SDK. UI code can use each device's capability and
 presentation metadata such as `requiresProofOfPossession`,

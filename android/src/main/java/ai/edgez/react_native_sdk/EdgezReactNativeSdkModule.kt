@@ -12,16 +12,8 @@ import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.location.LocationManager
-import android.net.ConnectivityManager
-import android.net.LinkProperties
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
-import android.net.wifi.WifiManager
-import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import android.os.ParcelUuid
-import android.util.Base64
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
@@ -37,10 +29,6 @@ import java.util.UUID
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 
 private val SERVICE = UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb")
 private val RX = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb")
@@ -55,7 +43,6 @@ private const val REQUEST_MIC = 7302
 private const val REQUEST_NOTIFICATION = 7303
 private const val REQUEST_LOCATION = 7304
 private const val REQUEST_USB_FIRMWARE = 7305
-private const val REQUEST_WIFI = 7306
 private const val MAX_PAYLOAD = 512
 private const val VOICE_CODEC_AMR_NB = 1
 private const val VOICE_CODEC_OPUS = 2
@@ -81,11 +68,6 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
     private var pendingMic: Promise? = null
     private var pendingNotification: Promise? = null
     private var pendingLocation: Promise? = null
-    private var pendingWifiScan: Promise? = null
-    private val connectivityManager get() = reactContext.getSystemService(ConnectivityManager::class.java)
-    @Volatile private var h7608Network: Network? = null
-    @Volatile private var h7608Gateway: String? = null
-    private var h7608NetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var voiceRecorder: MediaRecorder? = null
     private var voiceRecordingFile: File? = null
     private var voiceRecordingCodec = VOICE_CODEC_AMR_NB
@@ -140,95 +122,6 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
 
     @ReactMethod fun disconnect(arguments: ReadableMap, promise: Promise) { stopScan(); closeGatt(); emit(mapOf("type" to "connection", "connection" to "none")); promise.resolve(null) }
 
-    @ReactMethod
-    fun scanH7608ProvisioningNetworks(arguments: ReadableMap, promise: Promise) {
-        if (!hasWifiPermissions()) {
-            val activity = reactContext.currentActivity as? PermissionAwareActivity
-            if (activity == null) { promise.reject("activity_missing", "Wi-Fi discovery requires an activity"); return }
-            pendingWifiScan = promise
-            activity.requestPermissions(requiredWifiPermissions(), REQUEST_WIFI, this)
-            return
-        }
-        startH7608Scan(promise)
-    }
-
-    @ReactMethod
-    fun connectH7608ProvisioningNetwork(arguments: ReadableMap, promise: Promise) {
-        if (Build.VERSION.SDK_INT < 29) { promise.reject("wifi_unsupported", "H7608 provisioning requires Android 10 or newer"); return }
-        val ssid = arguments.getString("ssid").orEmpty()
-        val passphrase = arguments.getString("passphrase").orEmpty()
-        if (!Regex("^PROV_[A-F0-9]{12}$", RegexOption.IGNORE_CASE).matches(ssid)) {
-            promise.reject("wifi_invalid_ssid", "Invalid H7608 provisioning SSID"); return
-        }
-        if (passphrase.length !in 8..63) { promise.reject("wifi_invalid_passphrase", "The H7608 SoftAP passphrase must be 8 to 63 characters"); return }
-        disconnectH7608Network()
-        val manager = connectivityManager ?: run { promise.reject("wifi_unavailable", "Connectivity service is unavailable"); return }
-        val specifier = WifiNetworkSpecifier.Builder().setSsid(ssid).setWpa2Passphrase(passphrase).build()
-        val request = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .setNetworkSpecifier(specifier)
-            .build()
-        var completed = false
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                if (completed) return
-                val gateway = gatewayAddress(manager.getLinkProperties(network))
-                if (gateway == null) return
-                completed = true; h7608Network = network; h7608Gateway = gateway
-                reactContext.runOnUiQueueThread { promise.resolve(Arguments.createMap().apply { putString("ssid", ssid); putString("gateway", gateway) }) }
-            }
-            override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
-                if (completed) return
-                val gateway = gatewayAddress(properties) ?: return
-                completed = true; h7608Network = network; h7608Gateway = gateway
-                reactContext.runOnUiQueueThread { promise.resolve(Arguments.createMap().apply { putString("ssid", ssid); putString("gateway", gateway) }) }
-            }
-            override fun onUnavailable() {
-                if (!completed) { completed = true; reactContext.runOnUiQueueThread { promise.reject("wifi_connection_failed", "The H7608 SoftAP connection was not approved or timed out") } }
-            }
-            override fun onLost(network: Network) {
-                if (h7608Network == network) { h7608Network = null; h7608Gateway = null }
-            }
-        }
-        h7608NetworkCallback = callback
-        runCatching { manager.requestNetwork(request, callback, 30_000) }
-            .onFailure { h7608NetworkCallback = null; promise.reject("wifi_connection_failed", it.message, it) }
-    }
-
-    @ReactMethod
-    fun requestH7608Provisioning(arguments: ReadableMap, promise: Promise) {
-        val network = h7608Network
-        val gateway = h7608Gateway
-        if (network == null || gateway == null) { promise.reject("wifi_not_connected", "Connect to the H7608 provisioning SoftAP first"); return }
-        val method = arguments.getString("method").orEmpty().uppercase().ifBlank { "GET" }
-        val path = arguments.getString("path").orEmpty()
-        val bodyBase64 = if (arguments.hasKey("bodyBase64") && !arguments.isNull("bodyBase64")) arguments.getString("bodyBase64") else null
-        val body = if (bodyBase64 != null) Base64.decode(bodyBase64, Base64.DEFAULT) else arguments.getString("body").orEmpty().toByteArray()
-        val responseBase64 = arguments.hasKey("responseBase64") && arguments.getBoolean("responseBase64")
-        if (path !in listOf("/proto-ver", "/prov-session", "/prov-scan", "/prov-config", "/mqtt-config")) { promise.reject("wifi_invalid_path", "Unsupported H7608 provisioning endpoint"); return }
-        thread(name = "edgez-h7608-http") {
-            runCatching {
-                val client = OkHttpClient.Builder().socketFactory(network.socketFactory).build()
-                val builder = Request.Builder().url("http://$gateway$path").header("Accept", "application/octet-stream")
-                if (method == "POST") builder.post(body.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
-                else builder.get()
-                client.newCall(builder.build()).execute().use { response ->
-                    val responseBody = response.body.bytes()
-                    if (!response.isSuccessful) error("H7608 provisioning failed (${response.code}): ${responseBody.toString(Charsets.UTF_8)}")
-                    if (responseBase64) Base64.encodeToString(responseBody, Base64.NO_WRAP) else responseBody.toString(Charsets.UTF_8)
-                }
-            }.fold(
-                { value -> reactContext.runOnUiQueueThread { promise.resolve(value) } },
-                { error -> reactContext.runOnUiQueueThread { promise.reject("h7608_request_failed", error.message, error) } },
-            )
-        }
-    }
-
-    @ReactMethod
-    fun disconnectH7608ProvisioningNetwork(arguments: ReadableMap, promise: Promise) {
-        disconnectH7608Network(); promise.resolve(null)
-    }
     @ReactMethod fun initializeMesh(arguments: ReadableMap, promise: Promise) = queuePacket(arguments, promise)
     @ReactMethod fun sendPacket(arguments: ReadableMap, promise: Promise) = queuePacket(arguments, promise)
 
@@ -574,7 +467,6 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
             REQUEST_MIC -> { pendingMic?.resolve(granted); pendingMic = null; return true }
             REQUEST_NOTIFICATION -> { pendingNotification?.resolve(granted && EdgezBleForegroundService.notificationsAllowed(reactContext)); pendingNotification = null; return true }
             REQUEST_LOCATION -> { val pending = pendingLocation; pendingLocation = null; if (granted && pending != null) returnBestLocation(pending) else pending?.reject("location_permission_denied", "Location permission denied"); return true }
-            REQUEST_WIFI -> { val pending = pendingWifiScan; pendingWifiScan = null; if (granted && pending != null) startH7608Scan(pending) else pending?.reject("wifi_permission_denied", "Nearby Wi-Fi permission denied"); return true }
         }
         return false
     }
@@ -716,35 +608,6 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
 
     private fun requiredBlePermissions(): Array<String> = if (Build.VERSION.SDK_INT >= 31) arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT) else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
     private fun hasBlePermissions() = requiredBlePermissions().all { ContextCompat.checkSelfPermission(reactContext, it) == PackageManager.PERMISSION_GRANTED }
-    private fun requiredWifiPermissions(): Array<String> = if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES, Manifest.permission.ACCESS_FINE_LOCATION) else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-    private fun hasWifiPermissions() = requiredWifiPermissions().all { ContextCompat.checkSelfPermission(reactContext, it) == PackageManager.PERMISSION_GRANTED }
-
-    @SuppressLint("MissingPermission")
-    private fun startH7608Scan(promise: Promise) {
-        val wifi = reactContext.applicationContext.getSystemService(WifiManager::class.java)
-        if (wifi == null || !wifi.isWifiEnabled) { promise.reject("wifi_unavailable", "Wi-Fi is unavailable or disabled"); return }
-        wifi.startScan()
-        thread(name = "edgez-h7608-scan") {
-            Thread.sleep(1800)
-            val results = runCatching { wifi.scanResults }.getOrElse { emptyList() }
-                .filter { Regex("^PROV_[A-F0-9]{12}$", RegexOption.IGNORE_CASE).matches(it.SSID) }
-                .distinctBy { it.SSID.uppercase() }
-                .sortedByDescending { it.level }
-                .map { mapOf("ssid" to it.SSID, "bssid" to it.BSSID, "rssi" to it.level, "secure" to it.capabilities.contains("PSK")) }
-            reactContext.runOnUiQueueThread { promise.resolve(Arguments.fromList(results)) }
-        }
-    }
-
-    private fun gatewayAddress(properties: LinkProperties?): String? = properties?.routes
-        ?.firstOrNull { it.isDefaultRoute && it.gateway?.hostAddress?.contains(':') == false }
-        ?.gateway?.hostAddress
-
-    private fun disconnectH7608Network() {
-        val manager = connectivityManager
-        val callback = h7608NetworkCallback
-        if (manager != null && callback != null) runCatching { manager.unregisterNetworkCallback(callback) }
-        h7608NetworkCallback = null; h7608Network = null; h7608Gateway = null
-    }
     private fun byteArray(map: ReadableMap, key: String): ByteArray { val array = if (map.hasKey(key) && !map.isNull(key)) map.getArray(key) else null; return ByteArray(array?.size() ?: 0) { array!!.getInt(it).toByte() } }
 
     private fun discardVoiceRecording() {
@@ -785,7 +648,7 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
         pendingUsbFirmware?.reject("sdk_invalidated", "SDK was invalidated while selecting firmware")
         pendingUsbFirmware = null
         reactContext.removeActivityEventListener(this)
-        stopScan(); disconnectH7608Network(); discardVoiceRecording(); voicePlayer?.release(); voicePlayer = null; closeGatt()
+        stopScan(); discardVoiceRecording(); voicePlayer?.release(); voicePlayer = null; closeGatt()
         synchronized(usbIpLock) { usbIpTunnel.also { usbIpTunnel = null } }?.close()
         synchronized(usbIpLock) { usbIpServer.also { usbIpServer = null } }?.close()
         super.invalidate()

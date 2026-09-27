@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.28
+
+- Use `@orbital-systems/react-native-esp-idf-provisioning` as the single ESP-IDF
+  provisioning implementation for both ESP32 BLE and H7608 SoftAP transports.
+- Remove the SDK's dedicated H7608 Android Wi-Fi/HTTP transport and protocol
+  client while retaining H7608 UI metadata and configuration normalization.
+
 ## 0.1.24
 
 - Recover nRF54L CMSIS-DAP connections with nRESET pulses, repeated SWD setup,
