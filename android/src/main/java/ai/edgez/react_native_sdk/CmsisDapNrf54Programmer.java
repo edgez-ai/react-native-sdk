@@ -56,6 +56,17 @@ final class CmsisDapNrf54Programmer implements AutoCloseable {
     private static final int AP_TAR = AP | 0x04;
     private static final int AP_DRW = AP | 0x0C;
     private static final int MEM_AP_CSW = 0x03000052;
+    private static final int MEM_AP_DEVICE_ENABLED = 0x00000040;
+    private static final int CTRL_AP_NUMBER = 2;
+    private static final int CTRL_AP_IDR = 0xFC;
+    private static final int CTRL_AP_ERASEALL = 0x04;
+    private static final int CTRL_AP_ERASEALLSTATUS = 0x08;
+    private static final int CTRL_AP_RESET = 0x00;
+    private static final int CTRL_AP_IDR_EXPECTED = 0x32880000;
+    private static final int ERASEALL_READY = 0;
+    private static final int ERASEALL_READY_TO_RESET = 1;
+    private static final int ERASEALL_BUSY = 2;
+    private static final int ERASEALL_ERROR = 3;
     private static final int DHCSR = 0xE000EDF0;
     private static final int DCRSR = 0xE000EDF4;
     private static final int DCRDR = 0xE000EDF8;
@@ -141,8 +152,19 @@ final class CmsisDapNrf54Programmer implements AutoCloseable {
         }
         connectDebugPort(progress, total);
         writeDp(DP_SELECT, 0);
+        int csw = readAp(AP_CSW);
+        if ((csw & MEM_AP_DEVICE_ENABLED) == 0) {
+            progress.onProgress(0, total, "nRF54L is protected; erasing to unlock");
+            massEraseAndReconnect(progress, total);
+            writeDp(DP_SELECT, 0);
+        }
         writeAp(AP_CSW, MEM_AP_CSW);
-        haltCoreWithRecovery();
+        try {
+            haltCoreWithRecovery();
+        } catch (IOException failure) {
+            throw new IOException("Unable to halt the nRF54L Cortex-M33: "
+                    + deepestMessage(failure), failure);
+        }
         ByteBuffer algorithm = ByteBuffer.allocate(FLASH_ALGORITHM.length * 4).order(ByteOrder.LITTLE_ENDIAN);
         for (int instruction : FLASH_ALGORITHM) algorithm.putInt(instruction);
         writeMemoryBytes(ALGO_LOAD_ADDRESS, algorithm.array(), 0, algorithm.array().length);
@@ -207,6 +229,11 @@ final class CmsisDapNrf54Programmer implements AutoCloseable {
     }
 
     private void connectDebugPort(ProgressListener progress, long total) throws IOException {
+        connectDebugPort(progress, total, true);
+    }
+
+    private void connectDebugPort(ProgressListener progress, long total,
+                                  boolean allowPinReset) throws IOException {
         IOException lastFailure = null;
         for (int attempt = 0; attempt < SWD_CONNECT_ATTEMPTS; attempt++) {
             String stage = "connect";
@@ -214,7 +241,9 @@ final class CmsisDapNrf54Programmer implements AutoCloseable {
                 if (attempt > 0) {
                     progress.onProgress(0, total, "Retrying nRF54L SWD connection ("
                             + (attempt + 1) + "/" + SWD_CONNECT_ATTEMPTS + ")");
-                    pulseNReset();
+                    // A pin reset re-enables APPROTECT after CTRL-AP ERASEALL.
+                    // Post-erase retries must preserve the temporary debug access.
+                    if (allowPinReset) pulseNReset();
                     sleep(50L << attempt);
                 } else {
                     progress.onProgress(0, total, "Connecting to nRF54L over CMSIS-DAP");
@@ -307,6 +336,86 @@ final class CmsisDapNrf54Programmer implements AutoCloseable {
             }
         }
         throw new IOException("Unable to halt the nRF54L Cortex-M33", failure);
+    }
+
+    /**
+     * Unlocks an APPROTECTed nRF54L through CTRL-AP. This must run before any
+     * AHB-AP memory access (including the first DHCSR write used to halt the
+     * core). CTRL-AP ERASEALL is intentionally destructive: it erases all RRAM,
+     * UICR, SICR, RAM, peripheral state, and provisioned keys before the
+     * requested application image is written.
+     */
+    private void massEraseAndReconnect(ProgressListener progress, long total) throws IOException {
+        int ctrlApId = readCtrlAp(CTRL_AP_IDR);
+        if (ctrlApId != CTRL_AP_IDR_EXPECTED) {
+            throw new IOException("Unexpected nRF54L CTRL-AP ID 0x"
+                    + Integer.toHexString(ctrlApId));
+        }
+
+        // Clear a stale task value left by an interrupted debugger session,
+        // then trigger a fresh erase operation.
+        writeCtrlAp(CTRL_AP_ERASEALL, 0);
+        writeCtrlAp(CTRL_AP_ERASEALL, 1);
+        long deadline = System.currentTimeMillis() + 30_000;
+        boolean started = false;
+        int status = ERASEALL_READY;
+        while (System.currentTimeMillis() < deadline) {
+            status = readCtrlAp(CTRL_AP_ERASEALLSTATUS);
+            if (status == ERASEALL_ERROR) {
+                throw new IOException("nRF54L CTRL-AP erase failed; erase protection may be enabled");
+            }
+            if (status == ERASEALL_BUSY || status == ERASEALL_READY_TO_RESET) {
+                started = true;
+                break;
+            }
+            sleep(50);
+        }
+        if (!started) {
+            throw new IOException("nRF54L CTRL-AP erase did not start; status=0x"
+                    + Integer.toHexString(status));
+        }
+
+        deadline = System.currentTimeMillis() + 30_000;
+        while (System.currentTimeMillis() < deadline) {
+            status = readCtrlAp(CTRL_AP_ERASEALLSTATUS);
+            if (status == ERASEALL_ERROR) {
+                throw new IOException("nRF54L CTRL-AP erase failed while busy");
+            }
+            if (status == ERASEALL_READY_TO_RESET) break;
+            sleep(50);
+        }
+        if (status != ERASEALL_READY_TO_RESET) {
+            throw new IOException("nRF54L CTRL-AP erase timed out; status=0x"
+                    + Integer.toHexString(status));
+        }
+
+        progress.onProgress(0, total, "nRF54L unlocked; reconnecting debug port");
+        sleep(10);
+        writeCtrlAp(CTRL_AP_RESET, 2);
+        writeCtrlAp(CTRL_AP_RESET, 0);
+        writeCtrlAp(CTRL_AP_ERASEALL, 0);
+        sleep(750);
+        connectDebugPort(progress, total, false);
+
+        writeDp(DP_SELECT, 0);
+        int csw = readAp(AP_CSW);
+        if ((csw & MEM_AP_DEVICE_ENABLED) == 0) {
+            throw new IOException("nRF54L AHB-AP is still protected after mass erase");
+        }
+    }
+
+    private int readCtrlAp(int register) throws IOException {
+        selectApRegister(CTRL_AP_NUMBER, register);
+        return readAp(AP | (register & 0x0C));
+    }
+
+    private void writeCtrlAp(int register, int value) throws IOException {
+        selectApRegister(CTRL_AP_NUMBER, register);
+        writeAp(AP | (register & 0x0C), value);
+    }
+
+    private void selectApRegister(int apNumber, int register) throws IOException {
+        writeDp(DP_SELECT, (apNumber << 24) | (register & 0xF0));
     }
 
     private void writeMemoryWord(int address, int value) throws IOException {
@@ -415,6 +524,7 @@ final class CmsisDapNrf54Programmer implements AutoCloseable {
     private void writeDp(int address, int value) throws IOException { transfer(address, value); }
     private int readDp(int address) throws IOException { return transfer(address | READ, null); }
     private void writeAp(int request, int value) throws IOException { transfer(request, value); }
+    private int readAp(int request) throws IOException { return transfer(request | READ, null); }
 
     private int readDpBlock(int address) throws IOException {
         ByteBuffer payload = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
@@ -631,5 +741,17 @@ final class CmsisDapNrf54Programmer implements AutoCloseable {
             result.append(String.format("%02x", value[index] & 0xFF));
         }
         return result.toString();
+    }
+
+    private static String deepestMessage(Throwable failure) {
+        Throwable current = failure;
+        String message = failure.getMessage();
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+            if (current.getMessage() != null && !current.getMessage().isEmpty()) {
+                message = current.getMessage();
+            }
+        }
+        return message == null ? failure.getClass().getSimpleName() : message;
     }
 }
