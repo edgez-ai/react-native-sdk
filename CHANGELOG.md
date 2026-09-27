@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.29
+
+- Preserve nullable latitude and longitude values in the unified provisioning
+  configuration type for compatibility with applications that clear a saved
+  fixed location during provisioning.
+
 ## 0.1.28
 
 - Use `@orbital-systems/react-native-esp-idf-provisioning` as the single ESP-IDF

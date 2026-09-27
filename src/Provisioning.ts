@@ -29,8 +29,8 @@ export interface EdgezProvisioningConfig {
   country: string;
   halowChannel: number;
   softapSsid?: string;
-  latitude?: number;
-  longitude?: number;
+  latitude?: number | null;
+  longitude?: number | null;
   halowFrequencyKHz?: number;
   deviceName?: string;
   useDeviceGps?: boolean;
