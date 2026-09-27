@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.31
+
+- Declare Android's `CHANGE_NETWORK_STATE` permission so host applications can
+  open app-scoped H7608 SoftAP provisioning connections.
+
 ## 0.1.30
 
 - Treat empty ESP-IDF BLE and SoftAP provisioning scans as a normal empty

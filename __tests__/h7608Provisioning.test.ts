@@ -4,6 +4,8 @@ import {
   type EdgezProvisioningDevice,
 } from '../src/Provisioning';
 import * as EspProvisioning from '@orbital-systems/react-native-esp-idf-provisioning';
+import {readFileSync} from 'node:fs';
+import {resolve} from 'node:path';
 
 jest.mock('react-native-ble-plx', () => ({
   BleManager: jest.fn(() => ({startDeviceScan: jest.fn(), stopDeviceScan: jest.fn()})),
@@ -30,6 +32,14 @@ const mockSearch = EspProvisioning.ESPProvisionManager.searchESPDevices as jest.
 describe('ESP-IDF BLE and SoftAP provisioning', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  it('declares the Android network permissions required for H7608 SoftAP connections', () => {
+    const manifest = readFileSync(resolve(__dirname, '../android/src/main/AndroidManifest.xml'), 'utf8');
+
+    expect(manifest).toContain('android.permission.ACCESS_WIFI_STATE');
+    expect(manifest).toContain('android.permission.CHANGE_WIFI_STATE');
+    expect(manifest).toContain('android.permission.CHANGE_NETWORK_STATE');
   });
 
   it('uses the provisioning plugin for both BLE and H7608 SoftAP', async () => {
