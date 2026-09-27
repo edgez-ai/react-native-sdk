@@ -162,7 +162,8 @@ await provisioning.disconnect(device);
 On H7608, Android associates with `PROV_<serial>` as a local-only,
 application-scoped Wi-Fi network. Only provisioning HTTP requests use that
 network; Appwrite and other Internet traffic retain the phone's default route.
-The SDK stages upstream Wi-Fi first, then calls `/config`; a result is accepted
+The SDK uses the standard ESP-IDF `prov-scan` and `prov-config` endpoints for
+upstream Wi-Fi, then calls the custom `mqtt-config` endpoint; a result is accepted
 only when the gateway returns both `ok` and `persisted`. After the gateway
 applies the configuration, its AP uses `deviceName`. Device-specific payload
 fields—including the H7608 SoftAP SSID and nRF54 HaLow frequency and BLE-safe

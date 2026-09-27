@@ -5,6 +5,20 @@ import {EdgezProvisioningManager, type EdgezProvisioningConfig, type EdgezProvis
 jest.mock('react-native-ble-plx', () => ({BleManager: jest.fn()}));
 jest.mock('@orbital-systems/react-native-esp-idf-provisioning', () => ({}));
 
+function encode(value: string | number[]): string {
+  return Buffer.from(typeof value === 'string' ? value : Uint8Array.from(value)).toString('base64');
+}
+
+function varint(value: bigint): number[] {
+  const bytes: number[] = [];
+  do { const byte = Number(value & 0x7fn); value >>= 7n; bytes.push(byte | (value ? 0x80 : 0)); } while (value);
+  return bytes;
+}
+
+function bytesField(number: number, value: number[]): number[] {
+  return [...varint(BigInt(number * 8 + 2)), ...varint(BigInt(value.length)), ...value];
+}
+
 class FakeTransport implements EdgezPlatformTransport {
   calls: Array<{method: string; arguments_?: Record<string, unknown>}> = [];
 
@@ -15,9 +29,25 @@ class FakeTransport implements EdgezPlatformTransport {
     }
     if (method === 'requestH7608Provisioning') {
       const path = arguments_?.path;
-      if (path === '/info') return JSON.stringify({ok: true, model: 'HT-H7608-V1', serial: 'AABBCCDDEEFF', configured: false}) as T;
-      if (path === '/upstream/scan') return JSON.stringify({results: [{ssid: 'Farm WiFi', bssid: '11:22:33:44:55:66', signal: -51, encryption: {enabled: true}}]}) as T;
-      return JSON.stringify({ok: true, persisted: true}) as T;
+      if (path === '/proto-ver') return encode(JSON.stringify({prov: {ver: 'v1.1', sec_ver: 0, cap: ['wifi_scan', 'no_pop', 'edgez_h7608'], model: 'HT-H7608-V1', serial: 'AABBCCDDEEFF', configured: false}})) as T;
+      if (path === '/prov-session') return encode([0x52, 0x05, 0x08, 0x01, 0xaa, 0x01, 0x00]) as T;
+      if (path === '/prov-scan') {
+        const scanCall = this.calls.filter(call => call.arguments_?.path === '/prov-scan').length;
+        if (scanCall === 1) return encode([0x08, 0x01, 0x5a, 0x00]) as T;
+        if (scanCall === 2) return encode([0x08, 0x03, 0x6a, 0x04, 0x08, 0x01, 0x10, 0x01]) as T;
+        const ssid = [...Buffer.from('Farm WiFi')];
+        const rssi = varint((1n << 64n) - 51n);
+        const entry = [...bytesField(1, ssid), 0x18, ...rssi, ...bytesField(4, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]), 0x28, 0x03];
+        const results = bytesField(1, entry);
+        return encode([0x08, 0x05, ...bytesField(15, results)]) as T;
+      }
+      if (path === '/prov-config') {
+        const request = Buffer.from(String(arguments_?.bodyBase64), 'base64');
+        if (request[1] === 0x02) return encode([0x08, 0x03, 0x6a, 0x00]) as T;
+        if (request[1] === 0x04) return encode([0x08, 0x05, 0x7a, 0x00]) as T;
+        return encode([0x08, 0x01, 0x5a, 0x02, 0x5a, 0x00]) as T;
+      }
+      if (path === '/mqtt-config') return encode(JSON.stringify({ok: true, persisted: true})) as T;
     }
     return undefined as T;
   }
@@ -35,6 +65,7 @@ describe('H7608 SoftAP provisioning', () => {
     await expect(device!.scanUpstreamWifi('abcd1234')).resolves.toEqual([
       {ssid: 'Farm WiFi', bssid: '11:22:33:44:55:66', rssi: -51, secure: true},
     ]);
+    await expect(device!.provisionUpstreamWifi('Farm WiFi', 'secret12', 'abcd1234')).resolves.toEqual({ok: true, persisted: true});
     await expect(device!.configure({
       clientId: 'client-1', username: 'AABBCCDDEEFF', password: 'secret', projectId: 'project-1',
       channel: 'live', meshId: 'farm-mesh', passphrase: 'mesh-secret', country: 'US',
@@ -48,12 +79,19 @@ describe('H7608 SoftAP provisioning', () => {
       'requestH7608Provisioning',
       'requestH7608Provisioning',
       'requestH7608Provisioning',
+      'requestH7608Provisioning',
+      'requestH7608Provisioning',
+      'requestH7608Provisioning',
+      'requestH7608Provisioning',
+      'requestH7608Provisioning',
+      'requestH7608Provisioning',
       'disconnectH7608ProvisioningNetwork',
     ]);
-    expect(transport.calls[4]?.arguments_).toMatchObject({
-      method: 'POST', path: '/config', pop: 'abcd1234',
-      body: expect.stringContaining('"softapSsid":"Barn Gateway"'),
+    expect(transport.calls[10]?.arguments_).toMatchObject({
+      method: 'POST', path: '/mqtt-config', responseBase64: true,
+      bodyBase64: expect.any(String),
     });
+    expect(Buffer.from(String(transport.calls[10]?.arguments_?.bodyBase64), 'base64').toString()).toContain('"softapSsid":"Barn Gateway"');
   });
 
   it('keeps device-specific config shaping inside the SDK', async () => {

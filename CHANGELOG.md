@@ -179,3 +179,11 @@
   capability metadata into the shared provisioning API.
 - Added an Expo config plugin that owns the BLE and SoftAP provisioning native
   setup, so consuming applications no longer declare those libraries directly.
+
+# 0.1.27
+
+- Switched H7608 onboarding to the ESP-IDF Security 0 SoftAP wire protocol,
+  including standard session, Wi-Fi scan, Wi-Fi config, and custom MQTT config
+  endpoints.
+- Kept H7608 provisioning requests pinned to the app-scoped local network so
+  unrelated application traffic retains the phone's default Internet route.

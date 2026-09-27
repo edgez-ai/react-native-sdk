@@ -21,6 +21,7 @@ import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import android.os.ParcelUuid
+import android.util.Base64
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
@@ -202,20 +203,20 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
         if (network == null || gateway == null) { promise.reject("wifi_not_connected", "Connect to the H7608 provisioning SoftAP first"); return }
         val method = arguments.getString("method").orEmpty().uppercase().ifBlank { "GET" }
         val path = arguments.getString("path").orEmpty()
-        val pop = arguments.getString("pop").orEmpty()
-        val body = arguments.getString("body").orEmpty()
-        if (path !in listOf("/info", "/config", "/upstream", "/upstream/scan")) { promise.reject("wifi_invalid_path", "Unsupported H7608 provisioning endpoint"); return }
+        val bodyBase64 = if (arguments.hasKey("bodyBase64") && !arguments.isNull("bodyBase64")) arguments.getString("bodyBase64") else null
+        val body = if (bodyBase64 != null) Base64.decode(bodyBase64, Base64.DEFAULT) else arguments.getString("body").orEmpty().toByteArray()
+        val responseBase64 = arguments.hasKey("responseBase64") && arguments.getBoolean("responseBase64")
+        if (path !in listOf("/proto-ver", "/prov-session", "/prov-scan", "/prov-config", "/mqtt-config")) { promise.reject("wifi_invalid_path", "Unsupported H7608 provisioning endpoint"); return }
         thread(name = "edgez-h7608-http") {
             runCatching {
                 val client = OkHttpClient.Builder().socketFactory(network.socketFactory).build()
-                val builder = Request.Builder().url("http://$gateway/cgi-bin/edgez-provision$path")
-                    .header("Accept", "application/json").header("X-EdgeZ-PoP", pop)
-                if (method == "POST") builder.post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                val builder = Request.Builder().url("http://$gateway$path").header("Accept", "application/octet-stream")
+                if (method == "POST") builder.post(body.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
                 else builder.get()
                 client.newCall(builder.build()).execute().use { response ->
-                    val responseBody = response.body.string()
-                    if (!response.isSuccessful) error("H7608 provisioning failed (${response.code}): $responseBody")
-                    responseBody
+                    val responseBody = response.body.bytes()
+                    if (!response.isSuccessful) error("H7608 provisioning failed (${response.code}): ${responseBody.toString(Charsets.UTF_8)}")
+                    if (responseBase64) Base64.encodeToString(responseBody, Base64.NO_WRAP) else responseBody.toString(Charsets.UTF_8)
                 }
             }.fold(
                 { value -> reactContext.runOnUiQueueThread { promise.resolve(value) } },
