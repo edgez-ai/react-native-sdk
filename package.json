@@ -39,6 +39,7 @@
     "EdgezReactNativeSdk.podspec",
     "NuGet.config",
     "react-native.config.js",
+    "app.plugin.js",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

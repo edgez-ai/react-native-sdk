@@ -177,3 +177,5 @@
   protection is enabled, with complete erase-state handling and safe reconnects.
 - Moved remaining device-specific provisioning payload normalization and UI
   capability metadata into the shared provisioning API.
+- Added an Expo config plugin that owns the BLE and SoftAP provisioning native
+  setup, so consuming applications no longer declare those libraries directly.

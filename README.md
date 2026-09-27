@@ -171,6 +171,10 @@ presentation metadata such as `requiresProofOfPossession`,
 `requiresDeviceName`, `supportsUpstreamWifi`, `supportsDeviceGps`,
 `deviceNameMaxLength`, `category`, and `firmwareTarget`.
 
+Expo applications should add only `@edgez/react-native-sdk` to their `plugins`
+configuration. The SDK plugin configures its BLE and ESP-IDF provisioning
+dependencies, including both BLE and SoftAP transport permissions.
+
 ## Remote USB flashing (Android)
 
 The Android SDK can export USB devices attached to the phone through the same
