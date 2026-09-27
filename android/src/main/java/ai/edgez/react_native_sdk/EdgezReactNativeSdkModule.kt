@@ -27,6 +27,8 @@ import java.io.InputStream
 import java.util.ArrayDeque
 import java.util.UUID
 import java.security.MessageDigest
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -121,6 +123,46 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
     }
 
     @ReactMethod fun disconnect(arguments: ReadableMap, promise: Promise) { stopScan(); closeGatt(); emit(mapOf("type" to "connection", "connection" to "none")); promise.resolve(null) }
+
+    /**
+     * Sends the H7608 Security 0 custom-endpoint request on the Wi-Fi network
+     * selected by Espressif's SoftAP transport. Security 0 is plaintext, so
+     * this is wire-compatible with ESP-IDF's mqtt-config endpoint while also
+     * preserving non-200 response bodies that the upstream Android transport
+     * currently discards.
+     */
+    @ReactMethod
+    fun sendH7608CustomEndpoint(arguments: ReadableMap, promise: Promise) {
+        val endpoint = arguments.getString("endpoint").orEmpty()
+        val payload = arguments.getString("data").orEmpty().toByteArray(Charsets.UTF_8)
+        if (endpoint != "mqtt-config") {
+            promise.reject("h7608_invalid_endpoint", "Unsupported H7608 custom endpoint")
+            return
+        }
+        thread(name = "edgez-h7608-custom-endpoint") {
+            runCatching {
+                val connection = URL("http://192.168.4.1/$endpoint").openConnection() as HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.doOutput = true
+                connection.connectTimeout = 5_000
+                connection.readTimeout = 10_000
+                connection.setRequestProperty("Accept", "application/json")
+                connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                connection.setFixedLengthStreamingMode(payload.size)
+                connection.outputStream.use { it.write(payload) }
+                val status = connection.responseCode
+                val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+                val response = stream?.use { it.readBytes().toString(Charsets.UTF_8) }.orEmpty()
+                connection.disconnect()
+                if (status !in 200..299) error("H7608 mqtt-config failed ($status): ${response.ifBlank { "empty response" }}")
+                if (response.isBlank()) error("H7608 mqtt-config returned an empty response")
+                response
+            }.fold(
+                { response -> reactContext.runOnUiQueueThread { promise.resolve(response) } },
+                { error -> reactContext.runOnUiQueueThread { promise.reject("h7608_custom_endpoint_failed", error.message, error) } },
+            )
+        }
+    }
 
     @ReactMethod fun initializeMesh(arguments: ReadableMap, promise: Promise) = queuePacket(arguments, promise)
     @ReactMethod fun sendPacket(arguments: ReadableMap, promise: Promise) = queuePacket(arguments, promise)

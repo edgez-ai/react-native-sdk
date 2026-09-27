@@ -153,6 +153,7 @@ await provisioning.configure(device, {
   halowChannel,
   wifiUpstream: true,
   deviceName: userEnteredName,
+  softapPassword: userEnteredDeviceWifiPassword,
   useDeviceGps,
 }, {ssid: networks[0].ssid, passphrase: upstreamPassword});
 
@@ -165,8 +166,9 @@ The H7608 implements the standard ESP-IDF Security 0 `prov-session`, `prov-scan`
 and `prov-config` endpoints; the SDK calls its custom `mqtt-config` endpoint
 before completing upstream Wi-Fi provisioning. A configuration result is
 accepted only when the gateway returns both `ok` and `persisted`. After the
-gateway applies the configuration, its AP uses `deviceName`. Device-specific payload
-fields—including the H7608 SoftAP SSID and nRF54 HaLow frequency and BLE-safe
+gateway applies the configuration, its AP uses `deviceName` and the user-selected
+`softapPassword`. Device-specific payload fields—including the H7608 SoftAP SSID
+and nRF54 HaLow frequency and BLE-safe
 name—are derived inside the SDK. UI code can use each device's capability and
 presentation metadata such as `requiresProofOfPossession`,
 `requiresDeviceName`, `supportsUpstreamWifi`, `supportsDeviceGps`,

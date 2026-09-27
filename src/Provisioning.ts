@@ -7,6 +7,7 @@ import {
   ESPSecurity,
   ESPTransport,
 } from '@orbital-systems/react-native-esp-idf-provisioning';
+import {EdgezNativeTransport} from './EdgezMeshSdk';
 
 export type EdgezProvisioningKind = 'esp32' | 'nrf54' | 'h7608';
 export type EdgezProvisioningTransport = 'ble' | 'softap';
@@ -29,6 +30,7 @@ export interface EdgezProvisioningConfig {
   country: string;
   halowChannel: number;
   softapSsid?: string;
+  softapPassword?: string;
   latitude?: number | null;
   longitude?: number | null;
   halowFrequencyKHz?: number;
@@ -119,7 +121,11 @@ class EspIdfProvisioningDevice implements EdgezProvisioningDevice {
   }
 
   async configure(config: EdgezProvisioningConfig): Promise<EdgezProvisioningResult> {
-    const result = JSON.parse(await this.device.sendData('mqtt-config', JSON.stringify(config))) as EdgezProvisioningResult;
+    const payload = JSON.stringify(config);
+    const response = this.kind === 'h7608' && Platform.OS === 'android'
+      ? await new EdgezNativeTransport().invoke<string>('sendH7608CustomEndpoint', {endpoint: 'mqtt-config', data: payload})
+      : await this.device.sendData('mqtt-config', payload);
+    const result = JSON.parse(response) as EdgezProvisioningResult;
     return {...result, persisted: result.persisted ?? result.ok};
   }
 
@@ -309,6 +315,9 @@ function provisioningConfig(
   if (device.kind === 'h7608' && utf8Bytes(deviceName).length > device.deviceNameMaxLength) {
     throw new Error(`Device name must not exceed ${device.deviceNameMaxLength} UTF-8 bytes`);
   }
+  if (device.kind === 'h7608' && !/^[\x20-\x7e]{8,63}$/.test(input.softapPassword || '')) {
+    throw new Error('Device Wi-Fi password must be 8 to 63 printable ASCII characters');
+  }
   const config: EdgezProvisioningConfig = {
     clientId: input.clientId,
     username: input.username,
@@ -323,7 +332,10 @@ function provisioningConfig(
     latitude: input.latitude,
     longitude: input.longitude,
   };
-  if (device.kind === 'h7608') config.softapSsid = deviceName;
+  if (device.kind === 'h7608') {
+    config.softapSsid = deviceName;
+    config.softapPassword = input.softapPassword;
+  }
   if (device.kind === 'nrf54') {
     config.halowFrequencyKHz = halowFrequencyKHz(input.country, input.halowChannel);
     config.deviceName = utf8LimitedName(deviceName || device.serial, 64);

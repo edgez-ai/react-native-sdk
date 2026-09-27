@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.32
+
+- Send the H7608 `mqtt-config` custom endpoint directly on Android so JSON
+  response bodies remain available when provisioning fails.
+- Require and forward a user-selected password for the H7608's post-provisioning
+  Wi-Fi access point.
+
 ## 0.1.31
 
 - Declare Android's `CHANGE_NETWORK_STATE` permission so host applications can

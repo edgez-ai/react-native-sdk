@@ -75,7 +75,7 @@ describe('ESP-IDF BLE and SoftAP provisioning', () => {
     await expect(h7608.configure({
       clientId: 'client-1', username: h7608.serial, password: 'secret', projectId: 'project-1',
       channel: 'live', meshId: 'farm-mesh', passphrase: 'mesh-secret', country: 'US',
-      halowChannel: 27, softapSsid: 'Barn Gateway',
+      halowChannel: 27, softapSsid: 'Barn Gateway', softapPassword: 'new-secret',
     })).resolves.toEqual({ok: true, persisted: true});
     expect(pluginDevice.sendData).toHaveBeenCalledWith('mqtt-config', expect.stringContaining('"softapSsid":"Barn Gateway"'));
   });
@@ -112,5 +112,29 @@ describe('ESP-IDF BLE and SoftAP provisioning', () => {
     });
     expect(received).toMatchObject({halowFrequencyKHz: 915500, deviceName: 'Long 🐄 tracker name', useDeviceGps: true});
     expect(received).not.toHaveProperty('softapSsid');
+  });
+
+  it('requires and forwards a user-selected H7608 Wi-Fi password', async () => {
+    let received: EdgezProvisioningConfig | undefined;
+    const device: EdgezProvisioningDevice = {
+      kind: 'h7608', id: 'h7608-1', name: 'PROV_AABBCCDDEEFF', serial: 'AABBCCDDEEFF',
+      transport: 'softap', category: 'gateway', firmwareTarget: 'heltec-h7608-v1',
+      requiresProofOfPossession: true, requiresDeviceName: true, deviceNameMaxLength: 32,
+      supportsUpstreamWifi: true, supportsDeviceGps: false,
+      connect: async () => undefined,
+      configure: async config => { received = config; return {ok: true, persisted: true}; },
+      scanUpstreamWifi: async () => [],
+      provisionUpstreamWifi: async () => undefined,
+      disconnect: async () => undefined,
+    };
+    const input = {
+      clientId: 'client-1', username: device.serial, password: 'mqtt-secret', projectId: 'project-1',
+      channel: 'status', meshId: 'farm-mesh', passphrase: 'mesh-secret', country: 'US',
+      halowChannel: 27, wifiUpstream: false, deviceName: 'Barn Gateway',
+    };
+
+    await expect(new EdgezProvisioningManager().configure(device, input)).rejects.toThrow('Device Wi-Fi password');
+    await new EdgezProvisioningManager().configure(device, {...input, softapPassword: 'barn-secret'});
+    expect(received).toMatchObject({softapSsid: 'Barn Gateway', softapPassword: 'barn-secret'});
   });
 });
