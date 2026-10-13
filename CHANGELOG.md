@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.33
+
+- Allow apps to select the ESP32 BLE provisioning name prefix through
+  `scan({esp32BlePrefix})`, while retaining `PROV_` as the default.
+- Refresh Android's cached nRF54 GATT table before provisioning so firmware
+  upgrades that add the direct configuration service are discovered.
+- Report an actionable firmware-upgrade error when an nRF54 does not expose
+  the direct provisioning service.
+
 ## 0.1.32
 
 - Send the H7608 `mqtt-config` custom endpoint directly on Android so JSON

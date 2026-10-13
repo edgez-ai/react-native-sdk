@@ -133,7 +133,7 @@ the returned devices and collecting configuration fields:
 import {EdgezProvisioningManager} from '@edgez/react-native-sdk';
 
 const provisioning = new EdgezProvisioningManager();
-const {devices, warnings} = await provisioning.scan();
+const {devices, warnings} = await provisioning.scan({esp32BlePrefix: 'EZ_'});
 const device = devices[0];
 
 await provisioning.connect(device, 'abcd1234');

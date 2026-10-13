@@ -77,14 +77,20 @@ export interface EdgezProvisioningScanResult {
   warnings: string[];
 }
 
+export interface EdgezProvisioningScanOptions {
+  /** ESP-IDF BLE provisioning name prefix. Defaults to the legacy `PROV_`. */
+  esp32BlePrefix?: string;
+}
+
 function isEmptyProvisioningScan(error: unknown): boolean {
   return /no (?:bluetooth|wi-?fi) device found with given prefix/i.test(String(error));
 }
 
-function serialFromName(name: string): string {
-  const match = /^(?:PROV|NRF)_([A-F0-9]{12})$/i.exec(name);
-  if (!match) throw new Error(`Invalid provisioning name: ${name}`);
-  return match[1]!.toUpperCase();
+function serialFromName(name: string, prefixes: readonly string[] = ['PROV_', 'NRF_']): string {
+  const prefix = prefixes.find(candidate => name.toLowerCase().startsWith(candidate.toLowerCase()));
+  const serial = prefix ? name.slice(prefix.length) : '';
+  if (!/^[A-F0-9]{12}$/i.test(serial)) throw new Error(`Invalid provisioning name: ${name}`);
+  return serial.toUpperCase();
 }
 
 class EspIdfProvisioningDevice implements EdgezProvisioningDevice {
@@ -101,7 +107,7 @@ class EspIdfProvisioningDevice implements EdgezProvisioningDevice {
   readonly name: string;
   readonly serial: string;
 
-  constructor(private readonly device: ESPDevice) {
+  constructor(private readonly device: ESPDevice, namePrefix: string) {
     const softap = device.transport === ESPTransport.softap;
     this.kind = softap ? 'h7608' : 'esp32';
     this.transport = softap ? 'softap' : 'ble';
@@ -110,7 +116,7 @@ class EspIdfProvisioningDevice implements EdgezProvisioningDevice {
     this.deviceNameMaxLength = softap ? 32 : 128;
     this.id = device.name;
     this.name = device.name;
-    this.serial = serialFromName(device.name);
+    this.serial = serialFromName(device.name, [namePrefix]);
   }
 
   async connect(pop?: string): Promise<void> {
@@ -178,8 +184,22 @@ class Nrf54ProvisioningDevice implements EdgezProvisioningDevice {
   constructor(readonly id: string, readonly name: string) { this.serial = serialFromName(name); }
 
   async connect(): Promise<void> {
-    this.connected = await bleManager().connectToDevice(this.id, {autoConnect: false});
-    await this.connected.discoverAllServicesAndCharacteristics();
+    const manager = bleManager();
+    this.connected = await manager.connectToDevice(this.id, {
+      autoConnect: false,
+      // nRF54 firmware added the direct provisioning service after the FFF0
+      // control service. Android otherwise commonly reuses the older cached
+      // GATT table and reports the new service as missing.
+      ...(Platform.OS === 'android' ? {refreshGatt: 'OnConnected' as const} : {}),
+    });
+    this.connected = await this.connected.discoverAllServicesAndCharacteristics();
+    const services = await this.connected.services();
+    if (!services.some(service => service.uuid.toLowerCase() === nrfServiceUuid)) {
+      const connected = this.connected;
+      this.connected = null;
+      await manager.cancelDeviceConnection(connected.id).catch(() => undefined);
+      throw new Error('The nRF54 firmware does not expose the direct provisioning service. Install the latest nRF54 firmware and retry.');
+    }
     try { this.connected = await this.connected.requestMTU(247); } catch { /* Default ATT MTU is supported. */ }
   }
 
@@ -242,17 +262,26 @@ async function scanNrf54(): Promise<Nrf54ProvisioningDevice[]> {
 }
 
 export class EdgezProvisioningManager {
-  async scan(): Promise<EdgezProvisioningScanResult> {
+  async scan(options: EdgezProvisioningScanOptions = {}): Promise<EdgezProvisioningScanResult> {
     await requestProvisioningPermissions();
+    const esp32BlePrefix = options.esp32BlePrefix ?? 'PROV_';
+    if (!esp32BlePrefix) throw new Error('ESP32 BLE provisioning prefix must not be empty');
     const warnings: string[] = [];
     let nrf: Nrf54ProvisioningDevice[] = [];
     try { nrf = await scanNrf54(); } catch (error) { warnings.push(`nRF54 scan: ${String(error)}`); }
     const nrfNames = new Set(nrf.map(device => device.name.toLowerCase()));
     let esp: EspIdfProvisioningDevice[] = [];
     try {
-      esp = (await ESPProvisionManager.searchESPDevices('PROV_', ESPTransport.ble, ESPSecurity.secure))
-        .filter(device => /^PROV_[A-F0-9]{12}$/i.test(device.name) && !nrfNames.has(device.name.toLowerCase()))
-        .map(device => new EspIdfProvisioningDevice(device));
+      esp = (await ESPProvisionManager.searchESPDevices(esp32BlePrefix, ESPTransport.ble, ESPSecurity.secure))
+        .filter(device => {
+          try {
+            serialFromName(device.name, [esp32BlePrefix]);
+            return !nrfNames.has(device.name.toLowerCase());
+          } catch {
+            return false;
+          }
+        })
+        .map(device => new EspIdfProvisioningDevice(device, esp32BlePrefix));
     } catch (error) {
       if (!isEmptyProvisioningScan(error)) warnings.push(`ESP32 BLE scan: ${String(error)}`);
     }
@@ -264,7 +293,7 @@ export class EdgezProvisioningManager {
           name: device.name,
           transport: ESPTransport.softap,
           security: ESPSecurity.unsecure,
-        })),
+        }), 'PROV_'),
       );
     } catch (error) {
       if (!isEmptyProvisioningScan(error)) warnings.push(`ESP-IDF SoftAP scan: ${String(error)}`);

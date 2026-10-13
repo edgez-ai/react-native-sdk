@@ -45,15 +45,15 @@ describe('ESP-IDF BLE and SoftAP provisioning', () => {
   it('uses the provisioning plugin for both BLE and H7608 SoftAP', async () => {
     jest.useFakeTimers();
     mockSearch
-      .mockResolvedValueOnce([{name: 'PROV_001122334455', transport: 'ble', security: 1}])
+      .mockResolvedValueOnce([{name: 'EZ_001122334455', transport: 'ble', security: 1}])
       .mockResolvedValueOnce([{name: 'PROV_AABBCCDDEEFF', transport: 'softap', security: 3}]);
-    const scan = new EdgezProvisioningManager().scan();
+    const scan = new EdgezProvisioningManager().scan({esp32BlePrefix: 'EZ_'});
     await jest.advanceTimersByTimeAsync(6000);
     const {devices, warnings} = await scan;
     jest.useRealTimers();
 
     expect(warnings).toEqual([]);
-    expect(mockSearch).toHaveBeenNthCalledWith(1, 'PROV_', 'ble', 1);
+    expect(mockSearch).toHaveBeenNthCalledWith(1, 'EZ_', 'ble', 1);
     expect(mockSearch).toHaveBeenNthCalledWith(2, 'PROV_', 'softap', 0);
     expect(devices.map(device => ({kind: device.kind, transport: device.transport}))).toEqual([
       {kind: 'esp32', transport: 'ble'},
