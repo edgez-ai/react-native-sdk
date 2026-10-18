@@ -498,6 +498,9 @@ export class EdgezMeshSdk {
   isOtaReady(): Promise<boolean> { return this.transport.invoke('isOtaReady'); }
   abortOta(): Promise<void> { return this.transport.invoke('abortOta'); }
   getBestKnownLocation(): Promise<EdgezLocation | null> { return this.transport.invoke('getBestKnownLocation'); }
+  getCurrentLocation(timeoutMs = 20_000): Promise<EdgezLocation> {
+    return this.transport.invoke('getCurrentLocation', {timeoutMs: clamp(Math.round(timeoutMs), 1_000, 60_000)});
+  }
   clearCallLockScreenPresentation(): Promise<void> { return this.transport.invoke('clearCallLockScreenPresentation'); }
   cancelIncomingCallNotification(): Promise<void> { return this.transport.invoke('cancelIncomingCallNotification'); }
   startLiveVoiceAudio(): Promise<void> { return this.transport.invoke('startLiveVoiceAudio'); }

@@ -14,6 +14,15 @@ class FakeTransport implements EdgezPlatformTransport {
 const identity: EdgezUserIdentity = {userUuid: '00000000-0000-4000-8000-000000000016', userIdHigh: 11n, userIdLow: 22n, name: 'Protocol User', privateKey: new Uint8Array(32), publicKey: Uint8Array.from([1,2,3,4])};
 
 describe('EdgezMeshSdk packet API', () => {
+  it('requests a fresh native Android location with a bounded timeout', async () => {
+    const transport = new FakeTransport();
+    const sdk = new EdgezMeshSdk({transport});
+    await sdk.getCurrentLocation(90_000);
+    expect(transport.calls).toEqual([
+      {method: 'getCurrentLocation', arguments_: {timeoutMs: 60_000}},
+    ]);
+  });
+
   it('exposes the Android USB/IP server lifecycle', async () => {
     const transport = new FakeTransport();
     const sdk = new EdgezMeshSdk({transport});

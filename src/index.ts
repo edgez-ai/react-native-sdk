@@ -7,4 +7,5 @@ export * from './ota';
 export * from './appUpdates';
 export * from './useEdgezMesh';
 export * from './EdgezOrganicMap';
+export * from './location';
 export * from './Provisioning';

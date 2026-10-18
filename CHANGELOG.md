@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.34
+
+- Add an autolinked Android fresh-location API that waits for a GPS or network
+  fix with a bounded timeout, so Expo clean prebuilds no longer require an
+  application-owned native module.
+- Expose fresh location through both `getCurrentLocation()` and
+  `EdgezMeshSdk.getCurrentLocation()`.
+
 ## 0.1.33
 
 - Allow apps to select the ESP32 BLE provisioning name prefix through

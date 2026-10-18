@@ -9,10 +9,15 @@ import android.bluetooth.le.*
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.location.LocationManager
 import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.*
@@ -456,6 +461,67 @@ class EdgezReactNativeSdkModule(private val reactContext: ReactApplicationContex
             pendingLocation = promise; activity.requestPermissions(permissions, REQUEST_LOCATION, this); return
         }
         returnBestLocation(promise)
+    }
+    @ReactMethod fun getCurrentLocation(arguments: ReadableMap, promise: Promise) {
+        val fineGranted = ContextCompat.checkSelfPermission(reactContext, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarseGranted = ContextCompat.checkSelfPermission(reactContext, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!fineGranted && !coarseGranted) {
+            promise.reject("location_permission_denied", "Location permission has not been granted")
+            return
+        }
+
+        val manager = reactContext.getSystemService(LocationManager::class.java)
+        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .filter { provider -> runCatching { manager?.isProviderEnabled(provider) == true }.getOrDefault(false) }
+        if (manager == null || providers.isEmpty()) {
+            promise.reject("location_disabled", "Phone Location is off")
+            return
+        }
+
+        val finished = AtomicBoolean(false)
+        val handler = Handler(Looper.getMainLooper())
+        lateinit var listener: LocationListener
+
+        fun finish(location: Location?, code: String? = null, message: String? = null) {
+            if (!finished.compareAndSet(false, true)) return
+            handler.removeCallbacksAndMessages(listener)
+            runCatching { manager.removeUpdates(listener) }
+            if (location == null) {
+                promise.reject(code ?: "location_unavailable", message ?: "No location fix is available")
+                return
+            }
+            promise.resolve(Arguments.createMap().apply {
+                putDouble("latitude", location.latitude)
+                putDouble("longitude", location.longitude)
+                putDouble("accuracy", location.accuracy.toDouble())
+                putDouble("timestampMs", location.time.toDouble())
+            })
+        }
+
+        listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) = finish(location)
+            override fun onProviderEnabled(provider: String) = Unit
+            override fun onProviderDisabled(provider: String) = Unit
+            @Deprecated("Deprecated by Android")
+            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+        }
+
+        val timeoutMs = if (arguments.hasKey("timeoutMs") && !arguments.isNull("timeoutMs")) {
+            arguments.getDouble("timeoutMs").toLong().coerceIn(1_000L, 60_000L)
+        } else 20_000L
+        handler.postAtTime(
+            { finish(null, "location_timeout", "Timed out waiting for a native Android location fix") },
+            listener,
+            android.os.SystemClock.uptimeMillis() + timeoutMs,
+        )
+
+        try {
+            providers.forEach { provider -> manager.requestLocationUpdates(provider, 0L, 0f, listener, Looper.getMainLooper()) }
+        } catch (error: SecurityException) {
+            finish(null, "location_permission_denied", error.message ?: "Location permission has not been granted")
+        } catch (error: Exception) {
+            finish(null, "location_unavailable", error.message ?: "Could not start Android location updates")
+        }
     }
     @ReactMethod fun startVoiceRecording(arguments: ReadableMap, promise: Promise) {
         if (ContextCompat.checkSelfPermission(reactContext, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { promise.reject("microphone_permission_denied", "Microphone permission denied"); return }

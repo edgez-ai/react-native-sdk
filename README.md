@@ -20,7 +20,7 @@ iOS is not yet implemented.
 - verified Android React Native bundle updates through the firmware OTA proxy,
   with native-runtime compatibility checks and automatic crash rollback
 - Android BLE foreground service and message/call notification channels
-- best-known Android location lookup for shared beacons
+- best-known and fresh-fix Android location lookup for maps and shared beacons
 - native Organic Maps view with mesh-node markers, offline map downloads,
   themes, 2D/3D perspective, and optional satellite tiles on Android
 - identity, BLE preference, and installed-driver persistence
