@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.35
+
+- Accept ESP32, nRF54, and H7608 provisioning-name suffixes containing 6–12
+  hexadecimal characters during discovery.
+
 ## 0.1.34
 
 - Add an autolinked Android fresh-location API that waits for a GPS or network

@@ -86,10 +86,17 @@ function isEmptyProvisioningScan(error: unknown): boolean {
   return /no (?:bluetooth|wi-?fi) device found with given prefix/i.test(String(error));
 }
 
-function serialFromName(name: string, prefixes: readonly string[] = ['PROV_', 'NRF_']): string {
+function serialFromName(
+  name: string,
+  prefixes: readonly string[] = ['PROV_', 'NRF_'],
+  serialLengthRange: readonly [min: number, max: number] = [6, 12],
+): string {
   const prefix = prefixes.find(candidate => name.toLowerCase().startsWith(candidate.toLowerCase()));
   const serial = prefix ? name.slice(prefix.length) : '';
-  if (!/^[A-F0-9]{12}$/i.test(serial)) throw new Error(`Invalid provisioning name: ${name}`);
+  const [minLength, maxLength] = serialLengthRange;
+  if (!/^[A-F0-9]+$/i.test(serial) || serial.length < minLength || serial.length > maxLength) {
+    throw new Error(`Invalid provisioning name: ${name}`);
+  }
   return serial.toUpperCase();
 }
 
@@ -253,7 +260,7 @@ async function scanNrf54(): Promise<Nrf54ProvisioningDevice[]> {
       if (error) { clearTimeout(timer); manager.stopDeviceScan(); reject(error); return; }
       const name = device?.name || device?.localName;
       const hasService = device?.serviceUUIDs?.some(uuid => /^(?:0000)?fff0(?:-0000-1000-8000-00805f9b34fb)?$/i.test(uuid));
-      if (device && name && (/^NRF_[A-F0-9]{12}$/i.test(name) || (/^PROV_[A-F0-9]{12}$/i.test(name) && hasService))) {
+      if (device && name && (/^NRF_[A-F0-9]{6,12}$/i.test(name) || (/^PROV_[A-F0-9]{6,12}$/i.test(name) && hasService))) {
         found.set(device.id, new Nrf54ProvisioningDevice(device.id, name));
       }
     });
@@ -288,7 +295,7 @@ export class EdgezProvisioningManager {
     let h7608: EspIdfProvisioningDevice[] = [];
     try {
       const discovered = await ESPProvisionManager.searchESPDevices('PROV_', ESPTransport.softap, ESPSecurity.unsecure);
-      h7608 = discovered.filter(device => /^PROV_[A-F0-9]{12}$/i.test(device.name)).map(device =>
+      h7608 = discovered.filter(device => /^PROV_[A-F0-9]{6,12}$/i.test(device.name)).map(device =>
         new EspIdfProvisioningDevice(new ESPDevice({
           name: device.name,
           transport: ESPTransport.softap,

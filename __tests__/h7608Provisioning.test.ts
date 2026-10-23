@@ -45,8 +45,11 @@ describe('ESP-IDF BLE and SoftAP provisioning', () => {
   it('uses the provisioning plugin for both BLE and H7608 SoftAP', async () => {
     jest.useFakeTimers();
     mockSearch
-      .mockResolvedValueOnce([{name: 'EZ_001122334455', transport: 'ble', security: 1}])
-      .mockResolvedValueOnce([{name: 'PROV_AABBCCDDEEFF', transport: 'softap', security: 3}]);
+      .mockResolvedValueOnce([{name: 'EZ_001122', transport: 'ble', security: 1}])
+      .mockResolvedValueOnce([
+        {name: 'PROV_1AAE36', transport: 'softap', security: 3},
+        {name: 'PROV_NOT_HEX', transport: 'softap', security: 3},
+      ]);
     const scan = new EdgezProvisioningManager().scan({esp32BlePrefix: 'EZ_'});
     await jest.advanceTimersByTimeAsync(6000);
     const {devices, warnings} = await scan;
@@ -59,8 +62,11 @@ describe('ESP-IDF BLE and SoftAP provisioning', () => {
       {kind: 'esp32', transport: 'ble'},
       {kind: 'h7608', transport: 'softap'},
     ]);
+    expect(devices[0]!.serial).toBe('001122');
 
     const h7608 = devices[1]!;
+    expect(h7608.name).toBe('PROV_1AAE36');
+    expect(h7608.serial).toBe('1AAE36');
     const pluginDevice = (h7608 as unknown as {device: {
       connect: jest.Mock; sendData: jest.Mock; scanWifiList: jest.Mock; provision: jest.Mock;
     }}).device;
@@ -90,6 +96,26 @@ describe('ESP-IDF BLE and SoftAP provisioning', () => {
     await jest.advanceTimersByTimeAsync(6000);
     await expect(scan).resolves.toEqual({devices: [], warnings: []});
     jest.useRealTimers();
+  });
+
+  it('accepts H7608 SoftAP suffixes from six through twelve hex digits', async () => {
+    jest.useFakeTimers();
+    mockSearch
+      .mockRejectedValueOnce(new Error('No bluetooth device found with given prefix'))
+      .mockResolvedValueOnce([
+        {name: 'PROV_A1B2C3', transport: 'softap', security: 0},
+        {name: 'PROV_A1B2C3D4E', transport: 'softap', security: 0},
+        {name: 'PROV_A1B2C3D4E5F6', transport: 'softap', security: 0},
+        {name: 'PROV_A1B2C', transport: 'softap', security: 0},
+        {name: 'PROV_A1B2C3D4E5F67', transport: 'softap', security: 0},
+      ]);
+
+    const scan = new EdgezProvisioningManager().scan();
+    await jest.advanceTimersByTimeAsync(6000);
+    const {devices} = await scan;
+    jest.useRealTimers();
+
+    expect(devices.map(device => device.serial)).toEqual(['A1B2C3', 'A1B2C3D4E', 'A1B2C3D4E5F6']);
   });
 
   it('keeps device-specific config shaping inside the SDK', async () => {
